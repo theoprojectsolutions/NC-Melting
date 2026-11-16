@@ -3,6 +3,10 @@ RewriteEngine On
 RewriteCond %{HTTPS} off
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+# Acentos: todos os textos do sistema são UTF-8
+AddDefaultCharset UTF-8
+AddCharset UTF-8 .js .css .html
+
 <FilesMatch "\.(html|js|css)$">
   Header set Cache-Control "no-cache"
 </FilesMatch>
