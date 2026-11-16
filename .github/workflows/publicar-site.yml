@@ -1,0 +1,30 @@
+# Publica as telas (pasta public/) no ramo "site", que a Hostinger implanta automaticamente na public_html.
+# Rode em todo push na main que mexa em public/ (ou manualmente em Actions → Publicar site → Run workflow).
+name: Publicar site
+
+on:
+  push:
+    branches: [main]
+    paths: ['public/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar-site
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Atualizar ramo "site" com o conteúdo de public/
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git subtree split --prefix public -b site-novo
+          git push --force origin site-novo:site

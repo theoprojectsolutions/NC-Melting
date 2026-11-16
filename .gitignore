@@ -1,0 +1,7 @@
+# banco local do server.py (rede interna) — nunca vai para o GitHub
+data/
+__pycache__/
+*.db
+*.db-*
+.DS_Store
+Thumbs.db
