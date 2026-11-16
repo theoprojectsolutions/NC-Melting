@@ -1,0 +1,8 @@
+# Hostinger: força HTTPS e evita que o navegador guarde versões antigas das telas
+RewriteEngine On
+RewriteCond %{HTTPS} off
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+<FilesMatch "\.(html|js|css)$">
+  Header set Cache-Control "no-cache"
+</FilesMatch>
