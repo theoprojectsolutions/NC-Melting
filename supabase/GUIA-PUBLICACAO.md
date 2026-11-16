@@ -9,6 +9,20 @@ Funcionamento:
 
 O `server.py` continua funcionando para uso na rede interna, sem mudança.
 
+## Como atualizar o sistema (GitHub → Hostinger automático)
+
+O código fica em **github.com/theoprojectsolutions/NC-Melting**:
+
+- **`main`**: o projeto completo. É aqui que se fazem as mudanças.
+- **`site`**: só as telas. Não mexa nele à mão: a ação **Publicar site** (`.github/workflows/publicar-site.yml`) o atualiza sozinha sempre que `public/` muda na `main`.
+- A Hostinger (**Avançado → GIT**) está ligada ao ramo `site` e implanta automaticamente na `public_html`. Em menos de 1 minuto a mudança está no ar.
+
+Regras:
+1. **Nunca edite arquivos direto na `public_html`.** A próxima publicação sobrescreve.
+2. Telas: altere `public/` na `main` e envie (`git push`).
+3. Servidor: altere `supabase/functions/api/` e publique no Supabase (veja abaixo). A Hostinger não publica o servidor.
+4. Se algo quebrar: no GitHub, reverta o último commit da `main` e a versão anterior volta ao ar sozinha.
+
 ## 1. Banco de dados (Supabase)
 
 1. No projeto `melting-nc`, abra **SQL Editor → New query**.
