@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Melting · Não Conformidades</title>
+<meta name="theme-color" content="#060a12">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="apple-touch-icon" href="assets/icone-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>try { if (localStorage.getItem('nc-tema') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}</script>
+</head>
+<body class="auth-mode">
+<svg class="hexbg" aria-hidden="true">
+  <defs>
+    <pattern id="hex" width="56" height="100" patternUnits="userSpaceOnUse">
+      <path d="M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100" fill="none" stroke="#2f8be0" stroke-width="1.2"/>
+    </pattern>
+    <radialGradient id="hexfade" cx="85%" cy="5%" r="60%">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="hexmask"><rect width="100%" height="100%" fill="url(#hexfade)"/></mask>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#hex)" mask="url(#hexmask)"/>
+</svg>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#/painel" aria-label="Início">
+      <div class="brand-logo"><img src="assets/logo-melting-escuro.png" alt="Melting 70 anos"></div>
+      <div class="brand-tag">Gestão de <b>Não Conformidades</b></div>
+    </a>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot" id="sidebar-user"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu"></button>
+      <h1 id="page-title">Painel</h1>
+      <div class="topbar-actions">
+        <a class="btn btn-primary" href="#/nova" id="top-new"></a>
+      </div>
+    </header>
+    <div class="glowline" aria-hidden="true"></div>
+    <main id="view" class="view"></main>
+  </div>
+</div>
+
+<div id="auth"></div>
+<div class="offline-bar">Sem conexão com o servidor. Verifique se a janela do servidor (iniciar-servidor.bat) está aberta no computador servidor. Tentando reconectar…</div>
+<div id="print-area"></div>
+<div id="toasts" aria-live="polite"></div>
+<div id="modal-root"></div>
+<input type="file" id="import-file" accept="application/json,.json" hidden>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
