@@ -66,7 +66,7 @@ Rascunho (opcional, só quem abriu vê) → Em análise → Aguardando autoriza�
 
 - **Históricos** (menu lateral): NCs encerradas (a partir do dia seguinte ao encerramento) e canceladas, com filtros e exportação para Excel.
 - **Notificações**: o sino no canto superior direito mostra as mensagens lidas e não lidas; quando uma NC chega para você, aparece um aviso na tela.
-- **Usuários online**: ao lado do sino, em lista vertical com os nomes (até 4 e "+N outros"); clique para ver todos com o perfil.
+- **Usuários online**: ao lado do sino aparece só a quantidade ("● 5 online"); passe o mouse (ou toque, no celular) para ver todos os conectados com o perfil.
 - **Painel**: quadros Por origem, Por setor, Por responsável, Top 20 clientes e Custo da não qualidade mostram quantidade (ou valor) e percentual do período escolhido.
 - **Configurações → Setor responsável pela NC**: adicione ou exclua setores como nas Origens (é a mesma lista da tabela Setores / áreas).
 - **Usuários → Logs de acesso** (Administrador e Gestor): entradas, saídas, tentativas com erro e todas as alterações feitas no sistema, com exportação para Excel.

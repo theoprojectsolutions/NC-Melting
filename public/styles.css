@@ -902,3 +902,9 @@ html[data-theme="light"] .qp .op.zero{color:var(--dim)}
 .qp.dash-pct .hbar{grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"l v" "t t"; row-gap:5px; padding:5px 0}
 .qp.dash-pct .hb-l{grid-area:l; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap} .qp.dash-pct .hb-v{grid-area:v} .qp.dash-pct .hb-t{grid-area:t}
 .dash-grid .card.qp.dash-pct .hbars{max-height:300px}
+
+/* Usuários online: só a quantidade; a lista abre ao passar o mouse (ou ao clicar, no celular) */
+.online-btn{border-radius:999px; padding:7px 14px 7px 12px}
+.online-n{border-right:0; padding-right:0; align-self:auto; font-size:13px}
+.online-box:hover .online-pop{display:block}
+.online-pop::before{content:""; position:absolute; left:0; right:0; top:-10px; height:10px}
