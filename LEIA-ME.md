@@ -66,7 +66,9 @@ Rascunho (opcional, só quem abriu vê) → Em análise → Aguardando autoriza�
 
 - **Históricos** (menu lateral): NCs encerradas (a partir do dia seguinte ao encerramento) e canceladas, com filtros e exportação para Excel.
 - **Notificações**: o sino no canto superior direito mostra as mensagens lidas e não lidas; quando uma NC chega para você, aparece um aviso na tela.
-- **Usuários online**: ao lado do sino; passe o mouse para ver o nome completo.
+- **Usuários online**: ao lado do sino, em lista vertical com os nomes (até 4 e "+N outros"); clique para ver todos com o perfil.
+- **Painel**: quadros Por origem, Por setor, Por responsável, Top 20 clientes e Custo da não qualidade mostram quantidade (ou valor) e percentual do período escolhido.
+- **Configurações → Setor responsável pela NC**: adicione ou exclua setores como nas Origens (é a mesma lista da tabela Setores / áreas).
 - **Usuários → Logs de acesso** (Administrador e Gestor): entradas, saídas, tentativas com erro e todas as alterações feitas no sistema, com exportação para Excel.
 - **Kanban**: a seta no topo de cada coluna ordena os cartões pela data da NC (crescente/decrescente). O plano de ação 5W2H e a verificação de eficácia estão desativados por enquanto (para reativar: `PLANO_ACAO = True` em `server.py` e `PLANO_ACAO = true` em `public/app.js`).
 

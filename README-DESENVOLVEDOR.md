@@ -1,9 +1,16 @@
 # Melting · Gestão de Não Conformidades — Guia do desenvolvedor
 
 Sistema web multiusuário para registro e tratamento de Não Conformidades (NCs), usado na rede interna (LAN).
-Versão do servidor: **2.0** · Data deste pacote: **17/11/2026**.
+Versão do servidor: **2.0** · Data deste pacote: **18/11/2026**.
 
 ---
+
+## Novidades de 18/11/2026 (só front-end; `server.py` não mudou)
+
+- **Usuários online** em lista vertical de nomes (`renderOnline`, classes `.online-lista`/`.online-nome`).
+- **Painel → Por origem**: quadro novo (`.dash-origem`) com total do período, quantidade e % por origem (inclui as origens configuradas sem NC) e linha de total.
+- **Padrão dos rankings** (origem, setor, responsável, top 20 clientes, custo por setor): helper `qp(v, total, cor, valor?)` em `renderDashboard` gera "quantidade/valor + selo de %"; estilos na classe `.qp` (quadros estreitos usam layout em duas linhas).
+- **Configurações → Setor responsável pela NC**: cartão de chips igual ao de Origens, editando `cfg.setores`. Excluir setor pede confirmação; o servidor já remove gestor/equipe/custo do setor excluído (`r_cfg`).
 
 ## Novidades desde o pacote de 13/11/2026
 
