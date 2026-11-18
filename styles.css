@@ -844,3 +844,61 @@ html[data-theme="light"] .online-avs .avatar.sm[data-nome]:hover::after{backgrou
 .tbl.hist tbody tr{cursor:pointer}
 .tbl.hist td small{display:block; font-size:11px; color:var(--dim)}
 .tbl.hist .th-sort{cursor:pointer; color:var(--glow2)}
+
+/* Usuários online: lista vertical de nomes */
+.online-btn{align-items:center; gap:12px; padding:6px 14px 6px 12px; border-radius:12px; text-align:left}
+.online-n{display:flex; align-items:center; gap:7px; padding-right:12px; border-right:1px solid var(--line2); align-self:stretch}
+.online-lista{display:flex; flex-direction:column; gap:1px; min-width:0}
+.online-nome{display:flex; align-items:center; gap:7px; font-size:12px; line-height:15px; font-weight:600; color:var(--text); white-space:nowrap; max-width:200px; overflow:hidden; text-overflow:ellipsis}
+.online-nome::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--pc, var(--brand)); flex:none}
+.online-nome small{font-weight:500; color:var(--dim); margin-left:-3px}
+.online-mais{font-size:11px; line-height:14px; color:var(--glow2); padding-left:14px}
+@media (max-width:720px){ .online-lista{display:none} .online-n{border-right:0; padding-right:0} .online-n{display:flex} }
+
+/* Painel: indicador por origem */
+.origem-wrap{display:grid; grid-template-columns:minmax(180px,260px) 1fr; gap:28px; align-items:start}
+.origem-tot span{display:block; font-size:12.5px; color:var(--muted); margin-top:2px}
+.origem-tot p{font-size:12.5px; margin-top:12px}
+.origem-soma{display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding:8px 8px 0 0; border-top:1px solid var(--line2); font-size:13px; color:var(--muted)}
+.origem-soma b{color:var(--text)} .origem-soma small{color:var(--dim); font-weight:500; margin-left:4px}
+@media (max-width:720px){ .origem-wrap{grid-template-columns:1fr; gap:14px} }
+.dash-origem .hbar{grid-template-columns:minmax(110px,32%) 1fr 74px}
+.dash-origem .hbar > :last-child{white-space:nowrap; text-align:right}
+.dash-grid .card.dash-origem .hbars{max-height:400px}
+
+/* Por origem: quantidade + percentual em colunas alinhadas */
+.dash-origem .hbar{grid-template-columns:minmax(120px,30%) 1fr 132px; padding:4px 0}
+.dash-origem .hb-v{display:flex; align-items:center; justify-content:flex-end; gap:10px; font-variant-numeric:tabular-nums; white-space:nowrap}
+.dash-origem .ov{min-width:58px; text-align:right; font-size:12px; color:var(--muted)}
+.dash-origem .ov b{font-size:14px; font-weight:700; color:var(--text); margin-right:2px}
+.dash-origem .op{min-width:50px; text-align:center; padding:3px 8px; border-radius:999px; font-size:12px; font-weight:700; color:#5eead4; background:rgba(34,195,166,.14); border:1px solid rgba(34,195,166,.32)}
+.dash-origem .op.tot{color:var(--glow2); background:rgba(58,168,255,.12); border-color:rgba(58,168,255,.32)}
+.dash-origem .zero, .dash-origem .zero b{color:var(--dim); font-weight:500}
+.dash-origem .op.zero{background:transparent; border-color:var(--line2)}
+.dash-origem .origem-soma{padding:10px 18px 0 0}
+.dash-origem .origem-soma > span:first-child{font-weight:600; text-transform:uppercase; letter-spacing:.06em; font-size:11.5px}
+html[data-theme="light"] .dash-origem .op{color:#0f766e}
+.dash-origem .hb-t i[style^="width:0%"]{display:none}
+
+/* Rankings do Painel (origem, setor, responsável, clientes, custo): quantidade/valor + selo de percentual */
+.qp .hbar{grid-template-columns:minmax(90px,32%) 1fr 116px; padding:4px 0}
+.qp.dash-origem .hbar{grid-template-columns:minmax(120px,30%) 1fr 124px}
+.qp.qp-money .hbar{grid-template-columns:minmax(80px,28%) 1fr 158px}
+.qp .hb-v{display:flex; align-items:center; justify-content:flex-end; gap:8px; font-variant-numeric:tabular-nums; white-space:nowrap}
+.qp .ov{min-width:52px; text-align:right; font-size:11.5px; color:var(--muted)}
+.qp .ov b{font-size:13.5px; font-weight:700; color:var(--text); margin-right:2px}
+.qp .op{--pc:#3aa8ff; min-width:46px; text-align:center; padding:2px 7px; border-radius:999px; font-size:11.5px; font-weight:700;
+  color:color-mix(in srgb, var(--pc) 72%, #fff); background:color-mix(in srgb, var(--pc) 15%, transparent); border:1px solid color-mix(in srgb, var(--pc) 38%, transparent)}
+.qp .op.tot{--pc:#3aa8ff}
+.qp .zero, .qp .zero b{color:var(--dim); font-weight:500}
+.qp .op.zero{background:transparent; border-color:var(--line2); color:var(--dim)}
+.qp .hb-t i[style^="width:0%"]{display:none}
+html[data-theme="light"] .qp .op{color:color-mix(in srgb, var(--pc) 75%, #000)}
+html[data-theme="light"] .qp .op.zero{color:var(--dim)}
+.qp.qp-money .hbar{grid-template-columns:1fr auto; grid-template-areas:"l v" "t t"; row-gap:5px; padding:5px 0}
+.qp.qp-money .hb-l{grid-area:l} .qp.qp-money .hb-v{grid-area:v} .qp.qp-money .hb-t{grid-area:t}
+.qp.qp-money .ov{min-width:0}
+.dash-grid .card.qp-money .custo-setor .hbars{max-height:250px}
+.qp.dash-pct .hbar{grid-template-columns:minmax(0,1fr) auto; grid-template-areas:"l v" "t t"; row-gap:5px; padding:5px 0}
+.qp.dash-pct .hb-l{grid-area:l; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap} .qp.dash-pct .hb-v{grid-area:v} .qp.dash-pct .hb-t{grid-area:t}
+.dash-grid .card.qp.dash-pct .hbars{max-height:300px}

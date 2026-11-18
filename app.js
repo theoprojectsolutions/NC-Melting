@@ -449,8 +449,8 @@ function renderOnline(list) {
   S.online = list;
   const vis = list.slice(0, 4), extra = list.length - vis.length;
   box.innerHTML = `<button class="online-btn" data-act="online-toggle" aria-label="Usuários online agora">
-      <span class="online-dot"></span><span class="online-avs">${vis.map(u => `<span class="avatar sm" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}" data-nome="${esc(u.nome)}${u.id === S.me?.id ? ' (você)' : ''}">${esc(initials(u.nome))}</span>`).join('')}${extra > 0 ? `<span class="avatar sm more" data-nome="${esc(list.slice(4).map(u => u.nome).join(', '))}">+${extra}</span>` : ''}</span>
-      <span class="online-n"><b>${list.length}</b> online</span></button>
+      <span class="online-n"><span class="online-dot"></span><b>${list.length}</b> online</span>
+      <span class="online-lista">${vis.map(u => `<span class="online-nome" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}" title="${esc(u.nome)} · ${esc(PERFIS[u.perfil]?.label || u.perfil)}">${esc(u.nome)}${u.id === S.me?.id ? ' <small>(você)</small>' : ''}</span>`).join('')}${extra > 0 ? `<span class="online-mais" title="${esc(list.slice(4).map(u => u.nome).join(', '))}">+${extra} ${extra === 1 ? 'outro' : 'outros'}</span>` : ''}</span></button>
     <div class="online-pop" id="online-pop"><div class="online-h">${icon('users')} Online agora <small>${list.length}</small></div>
       ${list.map(u => `<div class="online-row"><span class="online-dot"></span><span class="avatar sm" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}">${esc(initials(u.nome))}</span><div><b>${esc(u.nome)}${u.id === S.me?.id ? ' <small>(você)</small>' : ''}</b><small>${PERFIS[u.perfil]?.label || u.perfil}</small></div></div>`).join('')}
       <p class="online-note">Ativos nos últimos 90 segundos.</p></div>`;
@@ -590,8 +590,11 @@ function renderDashboard() {
   const custoAno = ncsAno.reduce((s, n) => s + custoTotal(n), 0);
   const custoSetor = {};
   ncsAno.forEach(n => { const c = custoTotal(n); if (c > 0) custoSetor[n.setor || 'Sem setor'] = (custoSetor[n.setor || 'Sem setor'] || 0) + c; });
+  // Padrão dos rankings do Painel: quantidade (ou valor) + selo com o percentual, em colunas alinhadas
+  const qp = (v, total, c, val) => { const p = total ? Math.round(v / total * 100) : 0;
+    return `<span class="ov${v ? '' : ' zero'}">${val || `<b>${v}</b> NC${v === 1 ? '' : 's'}`}</span><span class="op${v ? '' : ' zero'}" style="--pc:${c}">${p}%</span>`; };
   const custoSetorRows = Object.entries(custoSetor).sort((a, b) => b[1] - a[1])
-    .map(([l, v]) => ({ l, v, t: `${money(v)} <small>${Math.round(v / custoAno * 100)}%</small>`, k: 'setor', fv: l, c: '#f5a524' }));
+    .map(([l, v]) => ({ l, v, t: qp(v, custoAno, '#f5a524', `<b>${money(v)}</b>`), tip: `${money(v)} · ${Math.round(v / custoAno * 100)}%`, k: 'setor', fv: l, c: '#f5a524' }));
   const reinc = ncs.filter(n => n.reincidente === 'sim').length;
   const first = (S.me.nome || '').split(' ')[0];
   const mine = open.filter(isMine).sort((a, b) => (a.prazo || '9').localeCompare(b.prazo || '9'));
@@ -603,12 +606,18 @@ function renderDashboard() {
   const sevRows = Object.entries(SEV).filter(([k, s]) => !s.legado || open.some(n => n.severidade === k)).map(([k, s]) => ({ l: s.label, v: open.filter(n => n.severidade === k).length, c: s.color }));
   // ranking completo (sem corte); empate em ordem alfabética
   const countBy = (field, list) => { const m = {}; list.forEach(n => { const x = n[field] || 'Não informado'; m[x] = (m[x] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR')); };
-  const pct = v => `${v} <small>${Math.round(v / ncsPer.length * 100)}%</small>`;
-  const setorRows = countBy('setor', ncsPer).map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'setor', fv: l }));
-  const respRows = countBy('responsavel', ncsPer).map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'q', fv: l, c: '#a78bfa' }));
+  const pctN = v => Math.round(v / ncsPer.length * 100);
+  const setorRows = countBy('setor', ncsPer).map(([l, v]) => ({ l, v, t: qp(v, ncsPer.length, '#3aa8ff'), tip: `${v} NC(s) · ${pctN(v)}%`, k: 'setor', fv: l }));
+  const respRows = countBy('responsavel', ncsPer).map(([l, v]) => ({ l, v, t: qp(v, ncsPer.length, '#a78bfa'), tip: `${v} NC(s) · ${pctN(v)}%`, k: 'q', fv: l, c: '#a78bfa' }));
+  // Indicador por origem: todas as origens configuradas (mesmo sem NC) + as antigas que ainda aparecem no período
+  const origCont = Object.fromEntries((S.cfg.origens || []).map(o => [o, 0]));
+  ncsPer.forEach(n => { const o = n.origem || 'Não informado'; origCont[o] = (origCont[o] || 0) + 1; });
+  const origRows = Object.entries(origCont).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR'))
+    .map(([l, v]) => ({ l, v, t: qp(v, ncsPer.length, '#22c3a6'), tip: `${v} NC(s) · ${ncsPer.length ? pctN(v) : 0}%`, k: 'q', fv: l, c: '#22c3a6' }));
+  const origTop = origRows.find(r => r.v > 0);
   const cliTodos = countBy('cliente', ncsPer.map(n => ({ cliente: (n.cliente || '').toUpperCase() || 'Não informado' })));
   const cliRows = cliTodos.slice(0, 20)   // ranking dos 20 principais clientes / fornecedores
-    .map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'q', fv: l, c: '#f5a524' }));
+    .map(([l, v]) => ({ l, v, t: qp(v, ncsPer.length, '#f5a524'), tip: `${v} NC(s) · ${pctN(v)}%`, k: 'q', fv: l, c: '#f5a524' }));
   const att = open.filter(n => n.prazo && dayDiff(t, n.prazo) <= 7).sort((a, b) => a.prazo.localeCompare(b.prazo));
   const attRow = n => `<div class="att" data-act="open" data-id="${n.id}"><span class="num">${esc(n.numero)}</span><span class="tt">${esc(n.titulo)}</span><span class="who">${esc(n.responsavel || '—')}</span>${dueLabel(n)}</div>`;
 
@@ -641,14 +650,20 @@ function renderDashboard() {
       <div class="card span-2"><h3>${icon('alert')} Atenção aos prazos <small>vencidas ou vencendo em 7 dias</small></h3>
         ${att.length ? `<div class="att-list">${att.map(attRow).join('')}</div>` : '<div class="empty-mini">Nenhuma NC vencida ou próxima do prazo.</div>'}
       </div>
-      <div class="card"><h3>${icon('money')} Custo da não qualidade <small>${perLabel}</small></h3>
+      <div class="card qp qp-money"><h3>${icon('money')} Custo da não qualidade <small>${perLabel}</small></h3>
         <div class="big-money">${money(custoAno)}</div>
         <p class="muted" style="font-size:12.5px;margin-top:6px">Soma dos prejuízos informados nas NCs do período (retrabalho, transporte, mão de obra etc.). NCs canceladas não entram.</p>
         <div class="custo-setor"><h4>Por setor</h4>${custoSetorRows.length ? hbars(custoSetorRows) : '<div class="empty-mini">Nenhum prejuízo informado no período.</div>'}</div>
       </div>
-      <div class="card dash-pct"><h3>Por setor <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${setorRows.length ? hbars(setorRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
-      <div class="card dash-pct"><h3>Por responsável <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${respRows.length ? hbars(respRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
-      <div class="card dash-pct"><h3>Top 20 clientes / fornecedores <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${cliRows.length ? hbars(cliRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}${cliTodos.length > 20 ? `<p class="muted" style="font-size:11.5px;margin-top:8px">+ ${cliTodos.length - 20} outro(s) com menos NCs — veja a lista completa em Não conformidades.</p>` : ''}</div>
+      <div class="card span-3 dash-origem qp"><h3>${icon('target')} Por origem <small>como as NCs foram detectadas · ${perLabel}</small></h3>
+        <div class="origem-wrap">
+          <div class="origem-tot"><div class="big-money">${ncsPer.length}</div><span>NC${ncsPer.length === 1 ? '' : 's'} no período (100%)</span>
+            ${origTop ? `<p class="muted">Principal origem: <b style="color:var(--text)">${esc(origTop.l)}</b> — ${Math.round(origTop.v / ncsPer.length * 100)}% das NCs.</p>` : ''}</div>
+          <div>${hbars(origRows)}<div class="origem-soma"><span>Total no período</span><span class="hb-v"><span class="ov"><b>${ncsPer.length}</b> NC${ncsPer.length === 1 ? '' : 's'}</span><span class="op tot">100%</span></span></div></div>
+        </div></div>
+      <div class="card dash-pct qp"><h3>Por setor <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${setorRows.length ? hbars(setorRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
+      <div class="card dash-pct qp"><h3>Por responsável <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${respRows.length ? hbars(respRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
+      <div class="card dash-pct qp"><h3>Top 20 clientes / fornecedores <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${cliRows.length ? hbars(cliRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}${cliTodos.length > 20 ? `<p class="muted" style="font-size:11.5px;margin-top:8px">+ ${cliTodos.length - 20} outro(s) com menos NCs — veja a lista completa em Não conformidades.</p>` : ''}</div>
     </div>`;
 }
 
@@ -1797,6 +1812,7 @@ function renderConfig() {
         </div>
         <form class="addline" data-add="setores" style="margin-top:12px"><input placeholder="Novo setor…" required><button class="btn btn-secondary">${icon('plus')}</button></form>
       </div>
+      ${listCard('setores', 'Setor responsável pela NC', 'Opções do campo “Setor responsável pela NC”. É a mesma lista de Setores / áreas: ao adicionar aqui, o setor aparece na tabela acima para definir gestor, equipe e custo.')}
       ${listCard('origens', 'Origens', 'Como a NC foi detectada.')}
       ${listCard('responsaveis', 'Responsáveis externos', 'Pessoas sem acesso ao sistema que podem constar como responsáveis (os usuários já aparecem automaticamente).')}
     </div>`;
@@ -2080,7 +2096,14 @@ function bindGlobal() {
         if (await saveCfg({ prefixo: $('#cfg-pre').value })) { toast('Prefixo salvo'); renderConfig(); }
         break;
       case 'del-list': {
-        const k = t.dataset.k, list = S.cfg[k].filter((_, i) => i !== +t.dataset.i);
+        const k = t.dataset.k, nome = S.cfg[k][+t.dataset.i], list = S.cfg[k].filter((_, i) => i !== +t.dataset.i);
+        if (k === 'setores') {
+          const usado = S.ncs.filter(n => n.setor === nome).length;
+          if (!(await confirmBox('Remover setor', `Remover o setor <b>${esc(nome)}</b>? Ele deixa de aparecer no campo “Setor responsável pela NC”, e o gestor, a equipe e o custo médio dele são apagados.${usado ? `<br><br>As ${usado} NC(s) já registradas com esse setor continuam como estão.` : ''}`, 'Remover', true))) break;
+          // o servidor já limpa gestor, equipe e custo de setores que saíram da lista
+          if (await saveCfg({ setores: list })) { toast(`Setor ${nome} removido`); renderConfig(); }
+          break;
+        }
         if (await saveCfg({ [k]: list })) renderConfig();
         break;
       }
