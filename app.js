@@ -6,29 +6,33 @@
 
 /* ---------- Constantes ---------- */
 const STATUS = {
-  aberta:      { label: 'Aberta',                  color: '#f5a524' },
+  aberta:      { label: 'Rascunho',                color: '#94a3b8' },
   analise:     { label: 'Em análise',              color: '#38bdf8' },
   acao:        { label: 'Ação em andamento',       color: '#a78bfa' },
   verificacao: { label: 'Verificação de eficácia', color: '#22d3ee' },
   autorizacao: { label: 'Aguardando autorização',  color: '#e879f9' },
+  qualidade:   { label: 'Qualidade',               color: '#22d3ee' },
   encerrada:  { label: 'Encerrada',               color: '#34d399' },
   cancelada:   { label: 'Cancelada',               color: '#7d8ea3' },
 };
 // Plano de ação (5W2H) e verificação de eficácia estão desativados por enquanto (fluxo simplificado).
 // Para reativar: true aqui e PLANO_ACAO = True no server.py.
 const PLANO_ACAO = false;
-const FLOW = PLANO_ACAO ? ['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'encerrada'] : ['aberta', 'analise', 'autorizacao', 'encerrada'];
+const FLOW = PLANO_ACAO ? ['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'qualidade', 'encerrada'] : ['aberta', 'analise', 'autorizacao', 'qualidade', 'encerrada'];
 const STATUS_USADOS = k => FLOW.includes(k) || k === 'cancelada';
 const SEV = {
   baixa:   { label: 'Baixa',   color: '#34d399', w: 1 },
   media:   { label: 'Média',   color: '#f5a524', w: 2 },
   alta:    { label: 'Alta',    color: '#fb7a3c', w: 3 },
-  critica: { label: 'Crítica', color: '#f43f5e', w: 4 },
+  critica: { label: 'Crítica', color: '#f43f5e', w: 4, legado: true },   // fora de uso: só para exibir NCs antigas
 };
+/** Severidades que podem ser escolhidas (Baixa, Média, Alta). */
+const SEV_OPCOES = Object.entries(SEV).filter(([, s]) => !s.legado);
 const PERFIS = {
   admin:       { label: 'Administrador', color: '#f472b6', desc: 'Vê todo o cenário (todas as NCs). Único que cancela e exclui NCs. Usuários, configurações e backup.' },
-  qualidade:   { label: 'Qualidade',     color: '#3aa8ff', desc: 'Vê só as suas NCs. Avança, retorna e reabre etapas. Encerra só se for gestor da área (ou se o setor não tiver gestor).' },
-  colaborador: { label: 'Colaborador',   color: '#93a7c0', desc: 'Vê só as suas NCs: as que registrou, pelas quais é responsável ou das áreas em que é gestor.' },
+  gestor:      { label: 'Gestor',        color: '#fbbf24', desc: 'Abaixo do administrador: vê todo o cenário (todas as NCs, usuários e configurações), mas só consulta — não altera usuários, configurações nem cancela NCs.' },
+  qualidade:   { label: 'Qualidade',     color: '#3aa8ff', desc: 'Vê todas as NCs e o Painel completo. Avança, retorna e reabre etapas. Encerra só se for gestor da área (ou se o setor não tiver gestor).' },
+  colaborador: { label: 'Colaborador',   color: '#93a7c0', desc: 'Vê só as suas NCs e pendências (as que registrou, pelas quais é responsável ou das áreas em que é gestor). O Painel mostra apenas os dados delas.' },
 };
 const DISPOSICOES = ['Retrabalho', 'Reparo', 'Uso como está (concessão do cliente)', 'Reclassificação', 'Sucata', 'Devolução ao fornecedor', 'Não aplicável'];
 const ACAO_TIPOS = ['Corretiva', 'Preventiva', 'Melhoria'];
@@ -175,24 +179,33 @@ const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1
 
 /* ---------- Permissões (o servidor também valida) ---------- */
 const isAdmin = () => S.me?.perfil === 'admin';
+/** Administrador ou Gestor: enxergam todo o cenário (o Gestor apenas consulta). */
+const veTudo = () => ['admin', 'gestor'].includes(S.me?.perfil);
+/** Enxergam todas as NCs (Painel completo): Administrador, Gestor e Qualidade. O Colaborador vê só as dele. */
+const veTodasNCs = () => ['admin', 'gestor', 'qualidade'].includes(S.me?.perfil);
 const isGestao = () => ['admin', 'qualidade'].includes(S.me?.perfil);
 /* Hierarquia dos setores (Configurações): gestor da área + equipe */
 const gestorSetor = setor => (S.cfg?.setorGestor || {})[setor] || '';
 const equipeSetor = setor => (S.cfg?.setorUsuarios || {})[setor] || [];
 const souGestor = n => !!gestorSetor(n.setor) && norm(gestorSetor(n.setor)) === norm(S.me?.nome);
 const doSetor = n => souGestor(n) || equipeSetor(n.setor).some(x => norm(x) === norm(S.me?.nome));
-/** Encerramento: gestor da área; o administrador sempre; sem gestor definido, a Qualidade. */
+/** Autorização (sair de "Aguardando autorização"): gestor da área; o administrador sempre; sem gestor definido, a Qualidade. */
 function podeEncerrar(n) {
   if (isAdmin()) return true;
   return gestorSetor(n.setor) ? souGestor(n) : isGestao();
 }
+/** Encerramento (sair da etapa "Qualidade"): somente perfis Qualidade, Gestor ou Administrador. */
+const podeFinalizar = () => ['admin', 'gestor', 'qualidade'].includes(S.me?.perfil);
 function isMine(n) {
   const nm = norm(S.me?.nome);
+  if (n.status === 'aberta') return n.criadoPorId === S.me?.id;   // rascunho é pendência de quem abriu
   return norm(n.responsavel) === nm || souGestor(n) || (n.acoes || []).some(a => norm(a.responsavel) === nm && a.status !== 'Concluída');
 }
 function canEdit(n) {
   if (isGestao()) return true;
   if (!isOpen(n)) return false;
+  if (n.status === 'qualidade' && podeFinalizar()) return true;
+  if (n.status === 'aberta') return n.criadoPorId === S.me.id;   // rascunho: só quem abriu
   if (n.criadoPorId === S.me.id) return true;
   const nm = norm(S.me.nome);
   return norm(n.responsavel) === nm || doSetor(n) || (n.acoes || []).some(a => norm(a.responsavel) === nm);
@@ -333,7 +346,7 @@ function hideAuth() { document.body.classList.remove('auth-mode'); $('#auth').in
 async function boot() {
   const b = await api('GET', '/bootstrap');
   S.me = b.me; S.cfg = b.cfg; S.ncs = b.ncs; S.pessoas = b.pessoas; S.rev = b.rev;
-  hideAuth(); renderNav(); renderUser(); startPolling();
+  hideAuth(); renderNav(); renderUser(); renderOnline(b.online); renderNotif(b.notif); startPolling();
   if (S.me.trocarSenha) await changePassword(true);
   if (!location.hash || location.hash === '#') location.hash = '#/painel'; else { S.lastHash = ''; route(); }
 }
@@ -369,8 +382,7 @@ function renderNav() {
     <a href="#/ncs" data-m="ncs">${icon('list')}Não conformidades ${over ? `<span class="badge" title="Vencidas">${over}</span>` : open ? `<span class="badge info">${open}</span>` : ''}</a>
     <a href="#/minhas" data-m="minhas">${icon('user')}Minhas pendências ${mine ? `<span class="badge info">${mine}</span>` : ''}</a>
     <a href="#/kanban" data-m="kanban">${icon('kanban')}Kanban de gestão</a>
-    <a href="#/nova" data-m="nova">${icon('plus')}Registrar NC</a>
-    ${isAdmin() ? `<div class="nav-label">Administração</div>
+    <a href="#/historicos" data-m="historicos">${icon('clock')}Históricos ${(() => { const h = S.ncs.filter(ehHistorico).length; return h ? `<span class="badge info">${h}</span>` : ''; })()}</a>    ${veTudo() ? `<div class="nav-label">Administração${isAdmin() ? '' : ' <small>(consulta)</small>'}</div>
     <a href="#/usuarios" data-m="usuarios">${icon('users')}Usuários</a>
     <a href="#/config" data-m="config">${icon('cog')}Configurações</a>` : ''}`;
   markNav();
@@ -418,10 +430,11 @@ function route() {
   else if (h === '#/ncs') renderList();
   else if (h === '#/minhas') { S.filters = { ...emptyFilters(), only: 'minhas', status: 'abertas' }; renderList('Minhas pendências'); }
   else if (h === '#/kanban') renderKanban();
+  else if (h === '#/historicos') renderHistoricos();
   else if (h === '#/nova') renderEditor(null);
   else if ((m = h.match(/^#\/nc\/(.+)$/))) renderEditor(decodeURIComponent(m[1]));
-  else if (h === '#/usuarios' && isAdmin()) renderUsers();
-  else if (h === '#/config' && isAdmin()) renderConfig();
+  else if (h === '#/usuarios' && veTudo()) renderUsers();
+  else if (h === '#/config' && veTudo()) renderConfig();
   else location.hash = '#/painel';
 }
 function gotoList(k, v) {
@@ -429,6 +442,60 @@ function gotoList(k, v) {
   if (k) S.filters[k] = v;
   if (location.hash === '#/ncs') renderList(); else location.hash = '#/ncs';
 }
+
+/* ---------- Usuários online (canto superior direito) ---------- */
+function renderOnline(list) {
+  const box = $('#online'); if (!box || !Array.isArray(list)) return;
+  S.online = list;
+  const vis = list.slice(0, 4), extra = list.length - vis.length;
+  box.innerHTML = `<button class="online-btn" data-act="online-toggle" aria-label="Usuários online agora">
+      <span class="online-dot"></span><span class="online-avs">${vis.map(u => `<span class="avatar sm" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}" data-nome="${esc(u.nome)}${u.id === S.me?.id ? ' (você)' : ''}">${esc(initials(u.nome))}</span>`).join('')}${extra > 0 ? `<span class="avatar sm more" data-nome="${esc(list.slice(4).map(u => u.nome).join(', '))}">+${extra}</span>` : ''}</span>
+      <span class="online-n"><b>${list.length}</b> online</span></button>
+    <div class="online-pop" id="online-pop"><div class="online-h">${icon('users')} Online agora <small>${list.length}</small></div>
+      ${list.map(u => `<div class="online-row"><span class="online-dot"></span><span class="avatar sm" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}">${esc(initials(u.nome))}</span><div><b>${esc(u.nome)}${u.id === S.me?.id ? ' <small>(você)</small>' : ''}</b><small>${PERFIS[u.perfil]?.label || u.perfil}</small></div></div>`).join('')}
+      <p class="online-note">Ativos nos últimos 90 segundos.</p></div>`;
+}
+document.addEventListener('click', e => { if (!e.target.closest('#online')) $('#online')?.classList.remove('open'); });
+
+/* ---------- Notificações (sino + pop-up) ---------- */
+const BELL = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>';
+const notifVistoKey = () => 'nc-notif-visto-' + (S.me?.id || '');
+function renderNotif(n) {
+  const box = $('#notif'); if (!box || !n) return;
+  S.notif = n;
+  const lista = n.lista || [];
+  box.innerHTML = `<button class="notif-btn${n.naoLidas ? ' tem' : ''}" data-act="notif-toggle" aria-label="Notificações" title="Notificações">${BELL}${n.naoLidas ? `<span class="notif-badge">${n.naoLidas > 99 ? '99+' : n.naoLidas}</span>` : ''}</button>
+    <div class="notif-pop" id="notif-pop">
+      <div class="notif-h">${BELL} Notificações <small>${n.naoLidas ? `${n.naoLidas} não lida(s)` : 'tudo lido'}</small>
+        ${n.naoLidas ? '<button class="linkbtn" data-act="notif-todas">Marcar todas como lidas</button>' : ''}</div>
+      ${lista.length ? lista.map(x => `<button class="notif-row${x.lida ? '' : ' nova'}" data-act="notif-open" data-id="${x.id}" data-nc="${esc(x.nc_id || '')}">
+          <span class="notif-dot"></span><div><b>${esc(x.titulo)}</b>${x.texto ? `<span>${esc(x.texto)}</span>` : ''}<small>${fmtDT(x.data)}${x.de ? ' · por ' + esc(x.de) : ''}</small></div></button>`).join('')
+        : '<div class="empty-mini">Nenhuma notificação ainda.</div>'}
+    </div>`;
+  // pop-up para o que chegou desde a última vez que este usuário viu
+  let visto = 0; try { visto = +localStorage.getItem(notifVistoKey()) || 0; } catch { /* ignora */ }
+  const novas = lista.filter(x => !x.lida && x.id > visto);
+  if (novas.length) {
+    try { localStorage.setItem(notifVistoKey(), String(Math.max(...lista.map(x => x.id)))); } catch { /* ignora */ }
+    notifPopup(novas);
+  }
+}
+function notifPopup(novas) {
+  const x = novas[0];
+  $('#notif-popup')?.remove();
+  document.body.insertAdjacentHTML('beforeend', `<div class="notif-popup" id="notif-popup" role="alertdialog" aria-live="assertive">
+    <div class="np-ico">${BELL}</div>
+    <div class="np-txt"><small>Nova notificação${novas.length > 1 ? ` · +${novas.length - 1} outra(s)` : ''}</small><b>${esc(x.titulo)}</b>${x.texto ? `<span>${esc(x.texto)}</span>` : ''}${x.de ? `<em>Enviada por ${esc(x.de)}</em>` : ''}</div>
+    <div class="np-acts">${x.nc_id ? `<button class="btn btn-primary btn-sm" data-act="notif-open" data-id="${x.id}" data-nc="${esc(x.nc_id)}">Abrir NC</button>` : ''}<button class="btn btn-ghost btn-sm" data-act="notif-fechar">Depois</button></div>
+  </div>`);
+  try {   // alerta do Windows, quando o navegador permitir (localhost ou HTTPS)
+    if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification(x.titulo, { body: x.texto || '', tag: 'nc-' + x.id });
+  } catch { /* ignora */ }
+}
+async function notifMarcar(body) {
+  try { renderNotif(await api('POST', '/notificacoes/lidas', body)); } catch (e) { toast(e.message, 'err'); }
+}
+document.addEventListener('click', e => { if (!e.target.closest('#notif')) $('#notif')?.classList.remove('open'); });
 
 /* ---------- Sincronização (outros usuários) ---------- */
 function startPolling() { stopPolling(); S.pollTimer = setInterval(poll, POLL_MS); }
@@ -444,6 +511,7 @@ function upsert(n) {
 }
 function applySync(r) {
   S.cfg = r.cfg; S.pessoas = r.pessoas;
+  renderOnline(r.online); renderNotif(r.notif);
   const ids = new Set(r.ids);
   // NC que passou a ser visível para mim sem ter sido alterada (ex.: virei gestor da área): busca a lista completa
   if (S.rev && r.ids.some(id => !S.ncs.some(n => n.id === id) && !r.changed.some(n => n.id === id))) { S.rev = 0; setTimeout(poll, 0); return; }
@@ -472,6 +540,7 @@ function applySync(r) {
   if (h === '#/painel') renderDashboard();
   else if (h === '#/ncs' || h === '#/minhas') { if ($('#tbody')) renderTable(); }
   else if (h === '#/kanban' && !$('.kcard.dragging')) { if ($('#kboard')) drawBoard(); else renderKanban(); }
+  else if (h === '#/historicos') { if ($('#hist-body')) drawHistoricos(); else renderHistoricos(); }
 }
 const lastUser = n => (n.historico || []).slice(-1)[0]?.usuario || 'outro usuário';
 function showRemoteBanner(srv) {
@@ -531,12 +600,11 @@ function renderDashboard() {
       <div class="kpi-top">${label}${icon(ic)}</div><div class="kpi-v">${val}</div><div class="kpi-s">${sub || '&nbsp;'}</div></button>`;
 
   const statusRows = Object.entries(STATUS).filter(([k]) => STATUS_USADOS(k) || ncs.some(n => n.status === k)).map(([k, s]) => ({ l: s.label, v: ncs.filter(n => n.status === k).length, c: s.color, k: 'status', fv: k }));
-  const sevRows = Object.entries(SEV).map(([k, s]) => ({ l: s.label, v: open.filter(n => n.severidade === k).length, c: s.color }));
+  const sevRows = Object.entries(SEV).filter(([k, s]) => !s.legado || open.some(n => n.severidade === k)).map(([k, s]) => ({ l: s.label, v: open.filter(n => n.severidade === k).length, c: s.color }));
   // ranking completo (sem corte); empate em ordem alfabética
   const countBy = (field, list) => { const m = {}; list.forEach(n => { const x = n[field] || 'Não informado'; m[x] = (m[x] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR')); };
   const pct = v => `${v} <small>${Math.round(v / ncsPer.length * 100)}%</small>`;
   const setorRows = countBy('setor', ncsPer).map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'setor', fv: l }));
-  const tipoRows = countBy('tipo', ncsPer).map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'tipo', fv: l, c: '#22d3ee' }));
   const respRows = countBy('responsavel', ncsPer).map(([l, v]) => ({ l, v, t: pct(v), tip: `${v} NC(s)`, k: 'q', fv: l, c: '#a78bfa' }));
   const cliTodos = countBy('cliente', ncsPer.map(n => ({ cliente: (n.cliente || '').toUpperCase() || 'Não informado' })));
   const cliRows = cliTodos.slice(0, 20)   // ranking dos 20 principais clientes / fornecedores
@@ -579,7 +647,6 @@ function renderDashboard() {
         <div class="custo-setor"><h4>Por setor</h4>${custoSetorRows.length ? hbars(custoSetorRows) : '<div class="empty-mini">Nenhum prejuízo informado no período.</div>'}</div>
       </div>
       <div class="card dash-pct"><h3>Por setor <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${setorRows.length ? hbars(setorRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
-      <div class="card dash-pct"><h3>Por tipo <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${tipoRows.length ? hbars(tipoRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
       <div class="card dash-pct"><h3>Por responsável <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${respRows.length ? hbars(respRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}</div>
       <div class="card dash-pct"><h3>Top 20 clientes / fornecedores <small>${perLabel} · ${ncsPer.length} NC${ncsPer.length === 1 ? '' : 's'}</small></h3>${cliRows.length ? hbars(cliRows) : '<div class="empty-mini">Nenhuma NC no período.</div>'}${cliTodos.length > 20 ? `<p class="muted" style="font-size:11.5px;margin-top:8px">+ ${cliTodos.length - 20} outro(s) com menos NCs — veja a lista completa em Não conformidades.</p>` : ''}</div>
     </div>`;
@@ -621,12 +688,11 @@ function monthlyChart() {
 function filtered() {
   const f = S.filters, q = f.q.trim().toLowerCase();
   const list = S.ncs.filter(n => {
-    if (q && ![n.numero, n.titulo, n.descricao, n.cliente, n.os, n.item, n.responsavel, n.setor, n.tipo, n.criadoPor].join(' ').toLowerCase().includes(q)) return false;
+    if (q && ![n.numero, n.titulo, n.descricao, n.cliente, n.os, n.item, n.responsavel, n.setor, n.origem, n.criadoPor].join(' ').toLowerCase().includes(q)) return false;
     if (f.status === 'abertas') { if (!isOpen(n)) return false; }
     else if (f.status && n.status !== f.status) return false;
     if (f.sev && n.severidade !== f.sev) return false;
     if (f.setor && n.setor !== f.setor) return false;
-    if (f.tipo && n.tipo !== f.tipo) return false;
     if (f.de && (n.dataOcorrencia || '') < f.de) return false;
     if (f.ate && (n.dataOcorrencia || '') > f.ate) return false;
     if (f.only === 'vencidas' && !isOverdue(n)) return false;
@@ -647,14 +713,12 @@ function renderList(title = 'Não conformidades') {
   const f = S.filters;
   const opt = (arr, cur) => arr.map(o => { const [val, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(val)}" ${val === cur ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
   const setores = [...new Set([...S.cfg.setores, ...S.ncs.map(n => n.setor).filter(Boolean)])];
-  const tipos = [...new Set([...S.cfg.tipos, ...S.ncs.map(n => n.tipo).filter(Boolean)])];
   v.innerHTML = `
     <div class="toolbar">
       <label class="search">${icon('search')}<input type="search" data-filter="q" value="${esc(f.q)}" placeholder="Buscar por número, título, cliente, OS, responsável…"></label>
       <select data-filter="status"><option value="">Todos os status</option>${opt([['abertas', 'Em tratamento (não encerradas)'], ...Object.entries(STATUS).filter(([k]) => STATUS_USADOS(k)).map(([k, s]) => [k, s.label])], f.status)}</select>
-      <select data-filter="sev"><option value="">Toda severidade</option>${opt(Object.entries(SEV).map(([k, s]) => [k, s.label]), f.sev)}</select>
+      <select data-filter="sev"><option value="">Toda severidade</option>${opt(SEV_OPCOES.map(([k, s]) => [k, s.label]), f.sev)}</select>
       <select data-filter="setor"><option value="">Todos os setores</option>${opt(setores, f.setor)}</select>
-      <select data-filter="tipo"><option value="">Todos os tipos</option>${opt(tipos, f.tipo)}</select>
       <input type="date" data-filter="de" value="${f.de}" title="Ocorrência de">
       <input type="date" data-filter="ate" value="${f.ate}" title="Ocorrência até">
       <button class="btn btn-ghost" data-act="export-csv" title="Exportar a lista filtrada para Excel">${icon('sheet')}<span>Exportar Excel</span></button>
@@ -673,7 +737,6 @@ function renderTable() {
   if (f.status) active.push(['status', f.status === 'abertas' ? 'Em tratamento' : STATUS[f.status]?.label]);
   if (f.sev) active.push(['sev', 'Severidade: ' + SEV[f.sev].label]);
   if (f.setor) active.push(['setor', f.setor]);
-  if (f.tipo) active.push(['tipo', f.tipo]);
   if (f.de || f.ate) active.push(['periodo', `Período: ${f.de ? fmtD(f.de) : '…'} a ${f.ate ? fmtD(f.ate) : '…'}`]);
   $('#result-info').innerHTML = `<span><b style="color:var(--text)">${rows.length}</b> de ${S.ncs.length} registro${S.ncs.length === 1 ? '' : 's'}</span>
     ${active.map(([k, l]) => `<span class="chip">${esc(l)}<button data-act="rm-filter" data-k="${k}" aria-label="Remover filtro">${icon('x')}</button></span>`).join('')}
@@ -684,7 +747,7 @@ function renderTable() {
     <tr data-act="open" data-id="${n.id}">
       <td class="num">${esc(n.numero)}</td>
       <td class="hide-m">${fmtD(n.dataOcorrencia)}</td>
-      <td class="tt">${esc(n.titulo)}<small>${esc([n.tipo, n.cliente].filter(Boolean).join(' · ') || '—')}</small></td>
+      <td class="tt">${esc(n.titulo)}<small>${esc(n.cliente || '—')}</small></td>
       <td class="hide-m"><span class="tag">${esc(n.setor || '—')}</span></td>
       <td>${pillSev(n.severidade)}</td>
       <td class="hide-m">${esc(n.responsavel || '—')}</td>
@@ -727,6 +790,58 @@ function kfMatch(n) {
   return true;
 }
 const kfAtivos = () => Object.values(S.kf).filter(Boolean).length;
+/* Históricos: NCs encerradas em dias anteriores (saem do Kanban no dia seguinte ao encerramento) */
+const fimEnc = n => (n.encerramento?.data || n.updatedAt || '').slice(0, 10);
+const ehHistorico = n => n.status === 'encerrada' && !!fimEnc(n) && fimEnc(n) < todayISO();
+function renderHistoricos() {
+  setTitle('Históricos');
+  const v = $('#view');
+  const f = S.hf ||= { q: '', setor: '', resp: '', cliente: '', de: '', ate: '', ord: 'desc' };
+  const todos = S.ncs.filter(ehHistorico);
+  const uniq = a => [...new Set(a.filter(Boolean))].sort((x, y) => x.localeCompare(y, 'pt-BR'));
+  const opt = (arr, cur) => arr.map(o => `<option value="${esc(o)}" ${o === cur ? 'selected' : ''}>${esc(o)}</option>`).join('');
+  v.innerHTML = `<p class="muted" style="margin-bottom:12px;font-size:13px">NCs <b>encerradas</b> em dias anteriores. Elas saem do Kanban no dia seguinte ao encerramento e ficam guardadas aqui para consulta.</p>
+    <div class="kfilters card">
+      <label class="search kf-q">${icon('search')}<input type="search" data-hf="q" value="${esc(f.q)}" placeholder="Buscar nº, título, cliente, item…"></label>
+      <label class="kf"><span>Setor</span><select data-hf="setor"><option value="">Todos</option>${opt(uniq(todos.map(n => n.setor)), f.setor)}</select></label>
+      <label class="kf"><span>Responsável</span><select data-hf="resp"><option value="">Todos</option>${opt(uniq(todos.map(n => n.responsavel)), f.resp)}</select></label>
+      <label class="kf"><span>Cliente / Fornec.</span><select data-hf="cliente"><option value="">Todos</option>${opt(uniq(todos.map(n => (n.cliente || '').toUpperCase())), f.cliente)}</select></label>
+      <label class="kf"><span>Encerrada de</span><input type="date" data-hf="de" value="${esc(f.de)}"></label>
+      <label class="kf"><span>até</span><input type="date" data-hf="ate" value="${esc(f.ate)}"></label>
+      <div class="kf-end"><span id="hf-info" class="muted"></span><button class="btn btn-ghost btn-sm" data-act="hist-csv">${icon('sheet')}<span>Exportar Excel</span></button></div>
+    </div>
+    <div id="hist-body"></div>`;
+  drawHistoricos();
+}
+function drawHistoricos() {
+  const box = $('#hist-body'); if (!box) return;
+  const f = S.hf, q = norm(f.q);
+  const list = S.ncs.filter(ehHistorico).filter(n =>
+    (!q || norm([n.numero, n.titulo, n.cliente, n.item, n.os, n.responsavel, n.setor].join(' ')).includes(q)) &&
+    (!f.setor || n.setor === f.setor) && (!f.resp || n.responsavel === f.resp) && (!f.cliente || (n.cliente || '').toUpperCase() === f.cliente) &&
+    (!f.de || fimEnc(n) >= f.de) && (!f.ate || fimEnc(n) <= f.ate))
+    .sort((a, b) => (fimEnc(a) + a.numero).localeCompare(fimEnc(b) + b.numero) * (f.ord === 'asc' ? 1 : -1));
+  S.histList = list;
+  $('#hf-info').innerHTML = `<b>${list.length}</b> de ${S.ncs.filter(ehHistorico).length} NCs`;
+  const noPrazo = n => !n.prazo ? '—' : fimEnc(n) <= n.prazo ? '<span class="txt-ok">No prazo</span>' : '<span class="txt-err">Fora do prazo</span>';
+  box.innerHTML = `<div class="card table-wrap"><table class="tbl hist"><thead><tr>
+      <th>Nº</th><th>Abertura</th><th class="th-sort" data-act="hist-ord" title="Ordenar pela data de encerramento">Encerramento ${f.ord === 'asc' ? '↑' : '↓'}</th>
+      <th>Não conformidade</th><th>Setor</th><th>Responsável</th><th>Severidade</th><th>Prazo</th><th class="hide-m">Prejuízo total</th></tr></thead><tbody>
+    ${list.map(n => `<tr data-act="open" data-id="${n.id}">
+      <td class="num">${esc(n.numero)}</td><td>${fmtD(n.dataRegistro || n.dataOcorrencia)}</td><td>${fmtD(fimEnc(n))}<small>${esc(n.encerramento?.por || '')}</small></td>
+      <td class="tt">${esc(n.titulo)}<small>${esc(n.cliente || '—')}</small></td><td><span class="tag">${esc(n.setor || '—')}</span></td>
+      <td>${esc(n.responsavel || '—')}</td><td>${pillSev(n.severidade)}</td><td>${noPrazo(n)}</td><td class="hide-m">${money(custoTotal(n))}</td></tr>`).join('')
+      || `<tr><td colspan="9"><div class="empty-mini">${S.ncs.some(ehHistorico) ? 'Nenhuma NC para esses filtros.' : 'Ainda não há NCs no histórico. Elas aparecem aqui a partir do dia seguinte ao encerramento.'}</div></td></tr>`}
+    </tbody></table></div>`;
+}
+/* Ordenação de cada coluna pela data da NC (salva neste navegador): padrão → ↓ recentes → ↑ antigas → padrão */
+function kSortGet() { if (!S.kSort) { try { S.kSort = JSON.parse(localStorage.getItem('nc-ksort') || '{}'); } catch { S.kSort = {}; } } return S.kSort; }
+function kSortToggle(col) {
+  const s = kSortGet(); s[col] = s[col] === 'desc' ? 'asc' : s[col] === 'asc' ? '' : 'desc';
+  if (!s[col]) delete s[col];
+  try { localStorage.setItem('nc-ksort', JSON.stringify(s)); } catch { /* ignora */ }
+  drawBoard();
+}
 
 function renderKanban() {
   setTitle('Kanban de gestão');
@@ -736,16 +851,16 @@ function renderKanban() {
   const f = S.kf;
   const opt = (arr, cur) => arr.map(o => { const [val, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(val)}" ${val === cur ? 'selected' : ''}>${esc(l)}</option>`; }).join('');
   const uniq = a => [...new Set(a.filter(Boolean))].sort((x, y) => x.localeCompare(y, 'pt-BR'));
-  const resps = uniq([...S.ncs.map(n => n.responsavel), ...(isAdmin() ? S.pessoas : [])]);
+  const resps = uniq([...S.ncs.map(n => n.responsavel), ...(veTodasNCs() ? S.pessoas : [])]);
   const setores = uniq([...S.cfg.setores, ...S.ncs.map(n => n.setor)]);
   const clientes = uniq(S.ncs.map(n => (n.cliente || '').toUpperCase()));
-  v.innerHTML = `<p class="muted" style="margin-bottom:12px;font-size:13px">Arraste um cartão para mover a NC de etapa. O sistema confere os requisitos de cada etapa e as suas permissões. NCs encerradas vão para <b>Históricos</b> no dia seguinte ao encerramento.${isAdmin() ? '' : ' Você está vendo <b>somente as suas NCs</b>.'}</p>
+  v.innerHTML = `<p class="muted" style="margin-bottom:12px;font-size:13px">Arraste um cartão para mover a NC de etapa. O sistema confere os requisitos de cada etapa e as suas permissões. NCs encerradas vão para a aba <a class="linkbtn" href="#/historicos">Históricos</a> (menu lateral) no dia seguinte ao encerramento.${veTodasNCs() ? '' : ' Você está vendo <b>somente as suas NCs</b>.'}</p>
   <div class="kfilters card">
     <label class="search kf-q">${icon('search')}<input type="search" data-kf="q" value="${esc(f.q)}" placeholder="Buscar nº, título, cliente, item…"></label>
     <label class="kf"><span>Responsável</span><select data-kf="resp"><option value="">Todos</option>${opt(resps, f.resp)}</select></label>
     <label class="kf"><span>Setor</span><select data-kf="setor"><option value="">Todos</option>${opt(setores, f.setor)}</select></label>
     <label class="kf"><span>Cliente / Fornec.</span><select data-kf="cliente"><option value="">Todos</option>${opt(clientes, f.cliente)}</select></label>
-    <label class="kf"><span>Severidade</span><select data-kf="sev"><option value="">Todas</option>${opt(Object.entries(SEV).map(([k, s]) => [k, s.label]), f.sev)}</select></label>
+    <label class="kf"><span>Severidade</span><select data-kf="sev"><option value="">Todas</option>${opt(SEV_OPCOES.map(([k, s]) => [k, s.label]), f.sev)}</select></label>
     <label class="kf"><span>Prazo</span><select data-kf="prazo"><option value="">Todos</option>${opt([['atrasadas', 'Atrasadas'], ['vencendo', 'Vencendo (7 dias)'], ['noprazo', 'No prazo']], f.prazo)}</select></label>
     <label class="kf"><span>Ocorrência de</span><input type="date" data-kf="de" value="${esc(f.de)}"></label>
     <label class="kf"><span>até</span><input type="date" data-kf="ate" value="${esc(f.ate)}"></label>
@@ -758,7 +873,8 @@ function renderKanban() {
 function drawBoard() {
   const box = $('#kboard'); if (!box) return;
   kanbanDia = todayISO();
-  const cols = [...FLOW, 'cancelada', 'historico'];
+  // NCs novas já nascem "Em análise": a coluna "Aberta" só aparece enquanto houver NC antiga nela
+  const cols = [...FLOW, 'cancelada'].filter(k => k !== 'aberta' || S.ncs.some(n => n.status === 'aberta'));
   // "Históricos": NCs encerradas em dias anteriores saem da coluna Encerrada automaticamente no dia seguinte.
   const hoje = todayISO();
   const fimDe = n => (n.encerramento?.data || n.updatedAt || '').slice(0, 10);
@@ -772,17 +888,23 @@ function drawBoard() {
     const list = k === 'historico'
       ? base.filter(doHistorico).sort((a, b) => fimDe(b).localeCompare(fimDe(a)))
       : base.filter(n => n.status === k && !(k === 'encerrada' && doHistorico(n))).sort((a, b) => (SEV[b.severidade]?.w || 0) - (SEV[a.severidade]?.w || 0) || (a.prazo || '9').localeCompare(b.prazo || '9'));
+    // ordenação pela data da NC (setinha no cabeçalho): ↓ mais recentes primeiro, ↑ mais antigas primeiro
+    const ord = kSortGet()[k];
+    if (ord) list.sort((a, b) => ((a.dataOcorrencia || '') + a.numero).localeCompare((b.dataOcorrencia || '') + b.numero) * (ord === 'asc' ? 1 : -1));
     const shown = k === 'encerrada' || k === 'cancelada' || k === 'historico' ? list.slice(0, 15) : list;
     const meta = k === 'historico' ? { label: 'Históricos', color: '#94a3b8' } : STATUS[k];
     return `<div class="kcol${k === 'historico' ? ' khist' : ''}" data-col="${k}">
-      <div class="kcol-h" style="--c:${meta.color}">${meta.label}<span>${list.length}</span></div>
+      <div class="kcol-h" style="--c:${meta.color}">${meta.label}
+        <button class="ksort${ord ? ' on' : ''}" data-act="ksort" data-col="${k}" title="${ord === 'desc' ? 'Data da NC: mais recentes primeiro (clique para inverter)' : ord === 'asc' ? 'Data da NC: mais antigas primeiro (clique para voltar ao padrão)' : 'Ordenar pela data da NC'}">${ord === 'asc' ? '↑' : ord === 'desc' ? '↓' : '⇅'}</button>
+        <span>${list.length}</span></div>
       ${shown.map(n => `<div class="kcard" draggable="${canEdit(n)}" data-id="${n.id}" data-act="open" style="--sc:${SEV[n.severidade]?.color}">
         <div class="khead"><span class="num">${esc(n.numero)}</span>${prazoBadge(n)}</div>
         <div class="kcli${n.cliente ? '' : ' none'}" title="Cliente / Fornecedor">${icon('building')}<span>${esc(n.cliente ? n.cliente.toUpperCase() : 'Sem cliente / fornecedor')}</span></div>
         <span class="tt">${esc(n.titulo)}</span>
         <div class="meta">${pillSev(n.severidade)}${dueLabel(n)}</div>
         <div class="kresp" title="Responsável pelo tratamento"><span class="avatar sm">${esc(initials(n.responsavel || '?'))}</span><span><small>Resp.</small>${esc(n.responsavel || 'Não definido')}</span></div>
-        <div class="meta"><span class="tag">${esc(n.setor || '—')}</span>${acaoProg(n)}</div>
+        ${(() => { const g = gestorSetor(n.setor); return `<div class="kresp kgest${g ? '' : ' none'}" title="Gestor da área (autoriza a NC)"><span class="avatar sm">${g ? esc(initials(g)) : '—'}</span><span><small>Gestor</small>${esc(g || 'Sem gestor definido')}</span></div>`; })()}
+        <div class="meta kfoot"><span class="kdata" title="Data de abertura da NC${n.dataOcorrencia && n.dataOcorrencia !== (n.dataRegistro || '').slice(0, 10) ? ` · ocorrência em ${fmtD(n.dataOcorrencia)}` : ''}">${icon('calendar')}${fmtD(n.dataRegistro || n.dataOcorrencia)}</span>${acaoProg(n)}<span class="tag">${esc(n.setor || '—')}</span></div>
       </div>`).join('')}
       ${k === 'historico' && !list.length ? '<div class="kempty">NCs encerradas aparecem aqui a partir do dia seguinte ao encerramento.</div>' : ''}
       ${list.length > shown.length ? `<button class="linkbtn" data-act="goto-filter" data-k="status" data-v="${k === 'historico' ? 'encerrada' : k}">Ver todas (${list.length})</button>` : ''}
@@ -809,10 +931,13 @@ function missingFor(d, status = d.status) {
   const m = [];
   switch (status) {
     case 'aberta':
-      if (!(d.contencao?.descricao || '').trim()) m.push('Descreva a <b>ação imediata / contenção</b> (seção 2).');
+      break;   // quem abre só registra; a justificativa é do responsável, na etapa "Em análise"
+    case 'qualidade':
+      if (!(d.qualidadeAcao || '').trim()) m.push('Descreva a <b>ação da Qualidade</b> para resolver a não conformidade (seção Encerramento).');
       break;
     case 'analise':
-      if (!(d.causa?.causaRaiz || '').trim()) m.push('Informe a <b>causa raiz</b> (seção 3).');
+      if (!(d.contencao?.descricao || '').trim()) m.push('Preencha a <b>justificativa do responsável</b> (seção 3).');
+      if (!(d.causa?.causaRaiz || '').trim()) m.push('Informe a <b>causa raiz</b> (seção 4).');
       if (!PLANO_ACAO) break;
       if (!d.acoes?.length) m.push('Cadastre ao menos <b>uma ação</b> no plano de ação (seção 4).');
       else if (d.acoes.some(a => !(a.descricao || '').trim() || !(a.responsavel || '').trim() || !a.prazo)) m.push('Preencha <b>O quê, Quem e Quando</b> de todas as ações.');
@@ -828,7 +953,7 @@ function missingFor(d, status = d.status) {
   return m;
 }
 function baseInvalid(d) {
-  const req = [['titulo', 'Título'], ['descricao', 'Descrição'], ['dataOcorrencia', 'Data da ocorrência'], ['tipo', 'Tipo'], ['setor', 'Setor de origem da NC'], ['responsavel', 'Responsável'], ['severidade', 'Severidade'], ['cliente', 'Cliente / Fornecedor'], ['origem', 'Origem / como foi detectada']];
+  const req = [['titulo', 'Título'], ['descricao', 'Descrição'], ['dataOcorrencia', 'Data da ocorrência'], ['setor', 'Setor responsável pela NC'], ['responsavel', 'Responsável'], ['severidade', 'Severidade'], ['cliente', 'Cliente / Fornecedor'], ['origem', 'Origem / como foi detectada']];
   const out = req.filter(([f]) => !String(getPath(d, f) || '').trim());
   if (!d.id && !d.custoLogHouve) out.push(['custoLogHouve', 'Houve custo logístico? (Sim ou Não)']);
   if (d.custoLogHouve === 'sim' && !(+d.custoLog > 0)) out.push(['custoLog', 'Valor do custo logístico']);
@@ -886,7 +1011,7 @@ function askText(title, body, ph) {
 function blankNC() {
   return {
     id: '', numero: '', titulo: '', descricao: '', dataOcorrencia: todayISO(),
-    tipo: '', origem: '', classificacao: 'Real', setor: '', cliente: '', os: '', item: '', quantidade: '',
+    tipo: '', origem: '', setor: '', cliente: '', os: '', item: '', quantidade: '',
     severidade: 'media', detectadoPor: S.me.nome, responsavel: '', prazo: proxDiaUtil(todayISO()), custo: '', custoLogHouve: '', custoLog: '',
     reincidente: 'nao', ncRelacionada: '', status: 'aberta',
     contencao: { descricao: '', responsavel: '', data: '', disposicao: '' },
@@ -911,6 +1036,7 @@ function renderEditor(id) {
   const src = id ? S.ncs.find(n => n.id === id) : null;
   if (id && !src) { setTitle('Não encontrada'); $('#view').innerHTML = `<div class="card empty"><div class="ring">${icon('alert')}</div><h2>NC não encontrada</h2><p>O registro pode ter sido excluído.</p><a class="btn btn-primary" href="#/ncs">Ver lista</a></div>`; return; }
   S.isNew = !src;
+  S.pendentes = [];   // anexos escolhidos antes de registrar a NC (enviados ao registrar)
   S.logFilter = { q: '', user: '', tipo: '' };
   loadDraft(src || blankNC(), false);
 }
@@ -944,7 +1070,7 @@ const sec = (id, n, title, sub, body, right = '') =>
 function drawEditor() {
   const d = S.draft, st = d.status, canE = editable();
   setTitle(S.isNew ? 'Registrar não conformidade' : d.numero);
-  const toc = [['ident', 'Identificação'], ['cont', 'Contenção'], ['causa', 'Análise de causa'], ...(PLANO_ACAO ? [['acoes', 'Plano de ação 5W2H'], ['efic', 'Eficácia']] : []), ['anexos', 'Evidências / anexos'], ['enc', 'Encerramento'], ['log', 'Histórico de alterações']];
+  const toc = [['ident', 'Identificação'], ['anexos', 'Evidências / anexos'], ['cont', 'Justificativa'], ['causa', 'Análise de causa'], ...(PLANO_ACAO ? [['acoes', 'Plano de ação 5W2H'], ['efic', 'Eficácia']] : []), ['enc', 'Encerramento'], ['log', 'Histórico de alterações']];
   const nSec = id => toc.findIndex(t => t[0] === id) + 1;
 
   let banner = '';
@@ -952,7 +1078,9 @@ function drawEditor() {
   else if (st === 'cancelada') banner = `<div class="banner mute">${icon('ban')}<div>NC cancelada. Registro bloqueado${isGestao() ? ' — use <b>Reabrir</b> para retomar o tratamento' : ''}.</div></div>`;
   else if (!canE) banner = `<div class="banner mute">${icon('lock')}<div>Você está <b>visualizando</b> esta NC. Podem editá-la: quem registrou (${esc(d.criadoPor || '—')}), o responsável (${esc(d.responsavel || '—')}), os responsáveis pelas ações e a Qualidade.</div></div>`;
   else if (!S.isNew && isOverdue(d)) banner = `<div class="banner warn">${icon('alert')}<div>Prazo de tratamento vencido em <b>${fmtD(d.prazo)}</b>. Atualize o andamento ou renegocie o prazo.</div></div>`;
-  else if (st === 'autorizacao') { const g = gestorSetor(d.setor); banner = `<div class="banner info">${icon('lock')}<div><b>Aguardando autorização</b> de ${g ? esc(g) : 'gestão da área (setor sem gestor definido — Qualidade/Administrador)'}. ${podeEncerrar(d) ? 'Revise a NC e use <b>Autorizar e encerrar</b> ou <b>Devolver para análise</b>.' : ''}</div></div>`; }
+  else if (st === 'autorizacao') { const g = gestorSetor(d.setor); banner = `<div class="banner info">${icon('lock')}<div><b>Aguardando autorização</b> de ${g ? esc(g) : 'gestão da área (setor sem gestor definido — Qualidade/Administrador)'}. ${podeEncerrar(d) ? 'Revise a NC e use <b>Autorizar e enviar à Qualidade</b> ou <b>Devolver para análise</b>.' : ''}</div></div>`; }
+  else if (st === 'aberta' && !S.isNew) banner = `<div class="banner mute">${icon('edit')}<div><b>Rascunho</b> — só quem abriu (e Administrador, Gestor e Qualidade) vê esta NC. Complete os campos obrigatórios e clique em <b>Enviar para análise</b> para mandá-la ao responsável.</div></div>`;
+  else if (st === 'qualidade') banner = `<div class="banner info">${icon('checkc')}<div><b>Etapa Qualidade:</b> autorizada pelo gestor da área. A Qualidade registra a <b>ação para resolver</b> o problema (seção Encerramento) e <b>encerra</b> a NC${podeFinalizar() ? '' : ' — perfis Qualidade, Gestor ou Administrador'}.</div></div>`;
   else if (!S.isNew) { const m = missingFor(d); if (m.length) banner = `<div class="banner info">${icon('target')}<div><b>Próximo passo:</b> ${m.join(' ')}</div></div>`; }
 
   $('#view').innerHTML = `
@@ -961,7 +1089,7 @@ function drawEditor() {
       <div class="ed-title">
         <div class="ed-num">${S.isNew ? 'Novo registro' : esc(d.numero)} ${S.isNew ? '' : pillStatus(st)} <span id="ed-sev">${pillSev(d.severidade)}</span></div>
         <h2 id="ed-h2">${esc(d.titulo) || 'Nova não conformidade'}</h2>
-        ${S.isNew ? '<div class="ed-meta">Preencha a identificação e, se já houver, a ação de contenção. As demais etapas podem ser tratadas depois.</div>' : `<div class="ed-meta">Registrada em ${fmtD(d.dataRegistro)} por ${esc(d.criadoPor || '—')} · Atualizada ${fmtDT(d.updatedAt)} por ${esc(lastUser(d))} · <button class="linkbtn" data-act="scroll" data-to="sec-log">${icon('clock')} Ver histórico (${(d.historico || []).length})</button></div>`}
+        ${S.isNew ? '<div class="ed-meta">Preencha a identificação e anexe as evidências. Use <b>Salvar rascunho</b> para terminar depois, ou <b>Enviar para análise</b> quando estiver completo — a NC vai para o responsável, que preenche a justificativa e a causa raiz.</div>' : `<div class="ed-meta">Registrada em ${fmtD(d.dataRegistro)} por ${esc(d.criadoPor || '—')} · Atualizada ${fmtDT(d.updatedAt)} por ${esc(lastUser(d))} · <button class="linkbtn" data-act="scroll" data-to="sec-log">${icon('clock')} Ver histórico (${(d.historico || []).length})</button></div>`}
       </div>
     </div>
     ${stepperHTML(d)}
@@ -971,11 +1099,11 @@ function drawEditor() {
       <nav class="ed-toc">${toc.map(([id, l], i) => `<button data-act="scroll" data-to="sec-${id}"><i>${i + 1}</i>${l}</button>`).join('')}</nav>
       <div class="ed-sections"><fieldset class="lock" ${canE ? '' : 'disabled'}>
         ${secIdent()}
-        ${secCont()}
-        ${secCausa()}
-        ${PLANO_ACAO ? sec('acoes', 4, 'Plano de ação (5W2H)', 'O quê, por quê, onde, quem, quando, como e quanto custa — para eliminar a causa raiz.', `<div id="acoes-body">${acoesHTML()}</div>`, `<span id="acoes-prog">${acaoProg(d)}</span>`) : ''}
+        ${sec('anexos', nSec('anexos'), 'Evidências e anexos', 'Fotos da peça/processo, nota fiscal, etiqueta, relatórios (imagens ou PDF) — já podem ser anexados na abertura.', `<div id="anexos-body">${anexosHTML()}</div>`)}
+        ${secCont(nSec('cont'))}
+        ${secCausa(nSec('causa'))}
+        ${PLANO_ACAO ? sec('acoes', nSec('acoes'), 'Plano de ação (5W2H)', 'O quê, por quê, onde, quem, quando, como e quanto custa — para eliminar a causa raiz.', `<div id="acoes-body">${acoesHTML()}</div>`, `<span id="acoes-prog">${acaoProg(d)}</span>`) : ''}
         ${PLANO_ACAO ? secEfic() : ''}
-        ${sec('anexos', nSec('anexos'),'Evidências e anexos', 'Fotos da peça/processo, relatórios de inspeção, certificados (imagens ou PDF).', `<div id="anexos-body">${anexosHTML()}</div>`)}
         ${secEnc(nSec('enc'))}
       </fieldset>${secLog(nSec('log'))}</div>
     </div>
@@ -997,12 +1125,10 @@ function secIdent() {
       ${fld('Cliente / Fornecedor', 'cliente', { req: true, ph: 'EX.: GRUPO SUZANO, AMBEV, PROCTER…', upper: true })}
       ${fld('Título (resumo da NC)', 'titulo', { req: true, cls: 'c2', ph: 'EX.: CORREIA DIVERGENTE, MANGUEIRA COM MELEJAMENTO…', upper: true })}
       ${fld('Data da ocorrência', 'dataOcorrencia', { type: 'date', req: true })}
-      ${fld('Tipo', 'tipo', { type: 'select', opts: c.tipos, req: true })}
-      ${fld('Origem / como foi detectada', 'origem', { type: 'select', opts: c.origens, req: true })}
-      ${fld('Setor de origem da NC', 'setor', { type: 'select', opts: c.setores, req: true })}
-      ${segRadio('Classificação', 'classificacao', [['Real', 'Real', '#3aa8ff'], ['Potencial', 'Potencial', '#a78bfa']])}
-      <div class="c2">${segRadio('Severidade', 'severidade', Object.entries(SEV).map(([k, s]) => [k, s.label, s.color]), true)}</div>
-      ${fld('Nº Pedido / NF / OC', 'os', { ph: 'Nº do pedido, nota fiscal ou ordem de compra' })}
+      ${fld('Origem / como foi detectada', 'origem', { type: 'select', opts: c.origens, req: true, cls: 'c2' })}
+      ${fld('Setor responsável pela NC', 'setor', { type: 'select', opts: c.setores, req: true })}
+      <div class="c2">${segRadio('Severidade', 'severidade', [...SEV_OPCOES, ...(SEV[S.draft.severidade]?.legado ? [[S.draft.severidade, SEV[S.draft.severidade]]] : [])].map(([k, s]) => [k, s.label, s.color]), true)}</div>
+      ${fld('Nº Pedido / NF / OC', 'os', { cls: 'c2', ph: 'Nº do pedido, nota fiscal ou ordem de compra' })}
       ${fld('Quantidade afetada', 'quantidade', { ph: 'Ex.: 3 peças' })}
       ${fld('Item / equipamento / peça', 'item', { cls: 'c2', ph: 'Ex.: Correia BC12A, mangueira sanitária, correia 390H…' })}
       ${fld('Prejuízo estimado', 'custo', { type: 'money', ph: '0,00', help: `<span id="custo-help">${custoHelp(S.draft.setor)}</span>` })}
@@ -1015,8 +1141,18 @@ function secIdent() {
       ${fld('Prazo para tratamento', 'prazo', { type: 'date', help: '1 dia útil após a abertura (sem fim de semana)' })}
       ${segRadio('Reincidente?', 'reincidente', [['nao', 'Não', '#7d8ea3'], ['sim', 'Sim', '#f43f5e']])}
       ${fld('NC relacionada (se reincidente)', 'ncRelacionada', { cls: 'c2', ph: 'Ex.: NC-2026-004' })}
+      <div class="c2 gestor-area" id="gestor-area">${gestorAreaHTML()}</div>
     </div>`);
 }
+/** Destaque com o gestor da área do setor responsável (quem autoriza e encerra a NC). */
+function gestorAreaHTML() {
+  const d = S.draft, s = d.setor, g = s ? gestorSetor(s) : '';
+  if (!s) return `<span class="ga-lbl">${icon('user')} Gestor da área</span><div class="ga-vazio">Escolha o setor responsável para ver o gestor.</div>`;
+  if (!g) return `<span class="ga-lbl">${icon('user')} Gestor da área · ${esc(s)}</span><div class="ga-vazio">Setor sem gestor definido — o administrador define em <b>Configurações</b>.</div>`;
+  return `<span class="ga-lbl">${icon('user')} Gestor da área · ${esc(s)}</span>
+    <div class="ga-nome"><span class="avatar">${esc(initials(g))}</span><div><b>${esc(g)}</b><small>Autoriza e encerra esta NC</small></div></div>`;
+}
+const refreshGestorArea = () => { const e = $('#gestor-area'); if (e) e.innerHTML = gestorAreaHTML(); };
 /** Custo logístico: o valor só é preenchido (e passa a ser obrigatório) quando "Houve custo logístico?" = Sim. */
 function custoLogField() {
   const sim = S.draft.custoLogHouve === 'sim';
@@ -1056,6 +1192,7 @@ function applySetorResp(setor) {
   const f = $('[data-fld="responsavel"]');
   if (f) { f.outerHTML = respField(); }
   applySetorCusto(setor);
+  refreshGestorArea();
 }
 /** Prejuízo estimado: usa o custo médio do setor (Configurações) quando o valor está vazio ou foi preenchido automaticamente. */
 const custoMedio = setor => (S.cfg?.setorCusto || {})[setor] || '';
@@ -1071,18 +1208,17 @@ function applySetorCusto(setor) {
   const t = $('#custo-total'); if (t) t.innerHTML = custoTotalInfo();
 }
 const custoHelp = setor => `Retrabalho, custos de transporte, mão de obra…${custoMedio(setor) ? ` · Custo médio de ${esc(setor)}: <b>${money(custoMedio(setor))}</b>` : ''}`;
-function secCont() {
-  return sec('cont', 2, 'Ação imediata / contenção', 'O que foi feito de imediato para conter o problema e o que fazer com o produto não conforme.', `
+function secCont(n = 3) {
+  return sec('cont', n, 'Justificativa do responsável', 'Explicação do responsável sobre o ocorrido, o que foi feito de imediato e o destino do produto não conforme.', `
     <div class="grid">
-      ${fld('Ação de contenção', 'contencao.descricao', { type: 'textarea', cls: 'c4', rows: 3, ph: 'Ex.: Peças segregadas e identificadas com etiqueta vermelha; inspeção 100% do lote…' })}
-      ${fld('Disposição do produto', 'contencao.disposicao', { type: 'select', opts: S.cfg.disposicoes || DISPOSICOES, cls: 'c2' })}
-      ${fld('Responsável', 'contencao.responsavel', { list: 'dl-resp' })}
+      ${fld('Justificativa do responsável', 'contencao.descricao', { type: 'textarea', cls: 'c4', rows: 3, ph: 'Ex.: Peças segregadas e identificadas com etiqueta vermelha; inspeção 100% do lote…',
+        help: S.isNew ? 'Preenchida pelo responsável na etapa Em análise — não é obrigatória na abertura.' : 'Obrigatória para enviar a NC para autorização.' })}
       ${fld('Data', 'contencao.data', { type: 'date' })}
     </div>`);
 }
-function secCausa() {
+function secCausa(n = 4) {
   const d = S.draft;
-  return sec('causa', 3, 'Análise de causa', 'Use os 5 Porquês para chegar à causa raiz.', `
+  return sec('causa', n, 'Análise de causa', 'Use os 5 Porquês para chegar à causa raiz.', `
     <div class="sub-h">5 Porquês <small>— pergunte “por quê?” até chegar à origem do problema</small></div>
     <div class="whys">${[0, 1, 2, 3, 4].map(i => `<label class="why"><b>${i + 1}º Por quê?</b><input data-f="causa.porques.${i}" value="${esc(d.causa.porques[i])}" placeholder="${i === 0 ? 'Por que a não conformidade ocorreu?' : 'Por que isso aconteceu?'}"></label>`).join('')}</div>
     <div class="grid sub-gap">${fld('Causa raiz identificada', 'causa.causaRaiz', { type: 'textarea', cls: 'c4', rows: 3, ph: 'Conclusão da análise: qual a causa raiz que, eliminada, impede a reincidência?' })}</div>`);
@@ -1121,7 +1257,17 @@ function secEfic() {
 }
 function anexosHTML() {
   const a = S.draft.anexos || [];
-  if (S.isNew) return '<div class="empty-mini">Registre a NC primeiro; em seguida você poderá anexar fotos e documentos.</div>';
+  if (S.isNew) {   // abertura: arquivos ficam reservados e são enviados ao registrar a NC
+    const p = S.pendentes || [];
+    return `<div class="anexos">
+      ${p.map((x, i) => `<div class="anexo" title="${esc(x.nome)}">
+        <div class="thumb" ${x.tipo.startsWith('image/') ? `style="background-image:url('${x.data}')"` : ''}>${x.tipo.startsWith('image/') ? '' : icon('file')}</div>
+        <div class="nm">${esc(x.nome)}<small>${fmtSize(x.tamanho)} · será enviado ao registrar</small></div>
+        <button class="icon-btn danger" data-act="del-pend" data-i="${i}" title="Remover">${icon('trash')}</button>
+      </div>`).join('')}
+      <label class="drop" id="drop">${icon('upload')}<span><b>Adicionar arquivos</b><br>clique ou arraste aqui</span><span style="font-size:11px;color:var(--dim)">Imagens são otimizadas · PDF até 8 MB</span><input type="file" id="file-in" multiple accept="image/*,application/pdf" hidden></label>
+    </div>`;
+  }
   const canE = editable();
   return `<div class="anexos">
     ${a.map(x => `<div class="anexo" data-act="view-anexo" data-id="${x.id}" title="${esc(x.nome)} — ${esc(x.por || '')} ${fmtDT(x.em)}">
@@ -1135,12 +1281,18 @@ function anexosHTML() {
 }
 function secEnc(n = 7) {
   const d = S.draft, g = gestorSetor(d.setor);
+  const aut = g ? `o gestor da área <b>${esc(d.setor)}</b> (<b>${esc(g)}</b>)` : d.setor ? `a gestão da área <b>${esc(d.setor)}</b> (sem gestor definido — Qualidade/Administrador)` : 'o gestor da área';
   const quem = d.status === 'encerrada' ? `Encerrada por <b>${esc(d.encerramento?.por || '—')}</b> em ${fmtD(d.encerramento?.data)}.`
-    : g ? `O encerramento é feito pelo gestor da área <b>${esc(d.setor)}</b>: <b>${esc(g)}</b>.`
-    : d.setor ? `O setor <b>${esc(d.setor)}</b> ainda não tem gestor definido (Configurações) — até lá, a Qualidade encerra.` : 'Escolha o setor para definir quem encerra a NC.';
-  return sec('enc', n, 'Encerramento', 'Feito pelo gestor da área. Comentários finais e lições aprendidas.', `
+    : `Primeiro ${aut} <b>autoriza</b>; depois a <b>Qualidade</b> registra a ação e <b>encerra</b> (perfis Qualidade, Gestor ou Administrador).`;
+  const naQualidade = d.status === 'qualidade';
+  return sec('enc', n, 'Encerramento', 'Ação da Qualidade para resolver a não conformidade, comentários finais e lições aprendidas.', `
     <div class="enc-who">${icon('lock')}<span>${quem}</span></div>
-    <div class="grid">${fld('Comentário de encerramento / lições aprendidas', 'encerramento.comentario', { type: 'textarea', cls: 'c4', rows: 2, ph: 'Opcional' })}</div>`);
+    <div class="grid">
+      ${fld('Ação da Qualidade', 'qualidadeAcao', { type: 'textarea', cls: 'c4', rows: 3, req: naQualidade,
+        ph: 'O que a Qualidade fez para resolver o problema (ex.: troca do material com o cliente, reinspeção do lote, ajuste do procedimento)…',
+        help: naQualidade ? 'Obrigatório para encerrar a NC.' : 'Preenchida pela Qualidade depois da autorização do gestor da área.' })}
+      ${fld('Comentário de encerramento / lições aprendidas', 'encerramento.comentario', { type: 'textarea', cls: 'c4', rows: 2, ph: 'Opcional' })}
+    </div>`);
 }
 
 /* ---------- Histórico (log) da NC ---------- */
@@ -1207,7 +1359,9 @@ function exportLog(d) {
 function actionbarHTML() {
   const d = S.draft, st = d.status, canE = editable();
   let b = `<span class="dirty ${S.dirty ? 'on' : ''}" id="dirty">● Alterações não salvas</span><div class="sp"></div>`;
-  if (S.isNew) return b + `<a class="btn btn-ghost" href="#/ncs">Cancelar</a><button class="btn btn-primary" data-act="save">${icon('save')}<span>Registrar NC</span></button>`;
+  if (S.isNew) return b + `<a class="btn btn-ghost" href="#/ncs">Cancelar</a>
+    <button class="btn btn-secondary" data-act="save-rascunho" title="Guarda a NC incompleta; só você a vê até enviar">${icon('save')}<span class="lg">Salvar rascunho</span><span class="sm">Rascunho</span></button>
+    <button class="btn btn-primary" data-act="save" title="Exige os campos obrigatórios e envia ao responsável">${icon('arrow')}<span class="lg">Enviar para análise</span><span class="sm">Enviar</span></button>`;
   const menu = [
     `<button data-act="duplicate">${icon('copy')}Duplicar como nova NC</button>`,
     isOpen(d) && isAdmin() ? `<button data-act="cancel-nc">${icon('ban')}Cancelar NC</button>` : '',
@@ -1217,17 +1371,23 @@ function actionbarHTML() {
     <button class="btn btn-ghost" data-act="print">${icon('print')}<span>Imprimir / PDF</span></button>`;
   if (!isOpen(d)) return b + (isGestao() ? `<button class="btn btn-primary" data-act="reopen">${icon('rotate')}<span>Reabrir</span></button>` : '');
   if (!canE) return b;
-  b += `<button class="btn btn-secondary" data-act="save">${icon('save')}<span>Salvar</span></button>`;
+  b += `<button class="btn btn-secondary" data-act="save">${icon('save')}<span>${st === 'aberta' ? 'Salvar rascunho' : 'Salvar'}</span></button>`;
   if (st === 'verificacao' && d.eficacia?.resultado === 'ineficaz') b += `<button class="btn btn-warn" data-act="back-analise">${icon('rotate')}<span>Retornar à análise</span></button>`;
   else {
-    const nx = FLOW[FLOW.indexOf(st) + 1] || 'encerrada', fim = nx === 'encerrada';
+    const nx = FLOW[FLOW.indexOf(st) + 1] || 'encerrada';
     const g = gestorSetor(d.setor);
-    if (fim && !podeEncerrar(d)) b += `<span class="hint-pill" title="A autorização e o encerramento são feitos pelo gestor da área">${icon('lock')} Aguardando autorização: ${g ? esc(g) : 'gestor da área'}</span>`;
-    else {
-      if (st === 'autorizacao') b += `<button class="btn btn-warn" data-act="devolver">${icon('rotate')}<span class="lg">Devolver para análise</span><span class="sm">Devolver</span></button>`;
-      const [lg, sm, ic] = fim ? [st === 'autorizacao' ? 'Autorizar e encerrar' : 'Encerrar NC', 'Encerrar', 'check']
-        : nx === 'autorizacao' ? ['Enviar para autorização', 'Enviar', 'arrow'] : ['Avançar: ' + STATUS[nx].label, 'Avançar', 'arrow'];
-      b += `<button class="btn btn-primary" data-act="advance" title="${lg}${nx === 'autorizacao' && g ? ' — gestor: ' + esc(g) : ''}"><span class="lg">${lg}</span><span class="sm">${sm}</span>${icon(ic)}</button>`;
+    const devolver = `<button class="btn btn-warn" data-act="devolver">${icon('rotate')}<span class="lg">Devolver para análise</span><span class="sm">Devolver</span></button>`;
+    const botao = (lg, sm, ic, title = lg) => `<button class="btn btn-primary" data-act="advance" title="${title}"><span class="lg">${lg}</span><span class="sm">${sm}</span>${icon(ic)}</button>`;
+    if (st === 'autorizacao') {   // gestor da área autoriza e manda para a Qualidade
+      b += podeEncerrar(d) ? devolver + botao('Autorizar e enviar à Qualidade', 'Autorizar', 'arrow')
+        : `<span class="hint-pill" title="A autorização é feita pelo gestor da área">${icon('lock')} Aguardando autorização: ${g ? esc(g) : 'gestor da área'}</span>`;
+    } else if (st === 'qualidade') {   // Qualidade age e encerra
+      b += podeFinalizar() ? devolver + botao('Encerrar NC', 'Encerrar', 'check')
+        : `<span class="hint-pill" title="O encerramento é feito pela Qualidade">${icon('lock')} Com a Qualidade para ação e encerramento</span>`;
+    } else {
+      b += nx === 'autorizacao' ? botao('Enviar para autorização', 'Enviar', 'arrow', 'Enviar para autorização' + (g ? ' — gestor: ' + esc(g) : ''))
+        : st === 'aberta' ? botao('Enviar para análise', 'Enviar', 'arrow', 'Exige os campos obrigatórios e envia ao responsável')
+        : botao('Avançar: ' + STATUS[nx].label, 'Avançar', 'arrow');
     }
   }
   return b;
@@ -1242,18 +1402,28 @@ function showInvalid(list) {
 }
 
 /** Grava o rascunho no servidor. Retorna true se gravou. */
-async function saveDraft({ silent, nota, force } = {}) {
+async function saveDraft({ silent, nota, force, rascunho } = {}) {
   const d = S.draft;
-  const inv = baseInvalid(d);
+  // rascunho (nova ou já salva como rascunho): só o título é obrigatório
+  const rasc = S.isNew ? !!rascunho : d.status === 'aberta';
+  const inv = rasc ? ((d.titulo || '').trim() ? [] : [['titulo', 'Título']]) : baseInvalid(d);
   showInvalid(inv.map(x => x[0]));
-  if (inv.length) { toast('Preencha: ' + inv.map(x => x[1]).join(', '), 'err'); return false; }
+  if (inv.length) { toast((rasc ? 'Para salvar o rascunho, preencha: ' : 'Preencha: ') + inv.map(x => x[1]).join(', '), 'err'); return false; }
   const btns = $$('#actionbar .btn'); btns.forEach(b => b.disabled = true);
   try {
-    const r = S.isNew ? await api('POST', '/ncs', { nc: d }) : await api('PUT', '/ncs/' + d.id, { nc: d, version: d.version, nota, force });
+    const r = S.isNew ? await api('POST', '/ncs', { nc: d, rascunho: rasc }) : await api('PUT', '/ncs/' + d.id, { nc: d, version: d.version, nota, force });
     upsert(r.nc); renderNav();
     S.dirty = false;
     if (S.isNew) {
-      S.isNew = false; toast(`${r.nc.numero} registrada com sucesso`);
+      S.isNew = false;
+      const pend = S.pendentes || []; S.pendentes = [];
+      let falhas = 0;
+      for (const p of pend) {   // envia os anexos escolhidos na abertura
+        try { await api('POST', `/ncs/${r.nc.id}/anexos`, { nome: p.nome, tipo: p.tipo, data: p.data }); }
+        catch (e) { falhas++; toast(`${p.nome}: ${e.message}`, 'err'); }
+      }
+      toast(`${r.nc.numero} ${r.nc.status === 'aberta' ? 'salva como rascunho' : 'enviada para análise'}${pend.length ? ` · ${pend.length - falhas} anexo(s) enviado(s)` : ''}`);
+      if (pend.length) await poll();
       location.hash = '#/nc/' + r.nc.id;
     } else {
       if (!silent) toast('Alterações salvas');
@@ -1300,7 +1470,11 @@ async function advance() {
     const g = gestorSetor(d.setor);
     return changeStatus(nx, { confirmMsg: ['Enviar para autorização', `Enviar <b>${esc(d.numero)}</b> para autorização ${g ? `de <b>${esc(g)}</b> (gestão da área ${esc(d.setor)})` : 'da gestão da área'}?`, 'Enviar'], okMsg: `${d.numero} enviada para autorização` });
   }
-  await changeStatus(nx, nx === 'encerrada' ?{ confirmMsg: ['Encerrar não conformidade', `Confirma o encerramento de <b>${esc(d.numero)}</b>? O registro ficará bloqueado para edição.`, 'Encerrar'] } : {});
+  if (d.status === 'aberta')
+    return changeStatus(nx, { confirmMsg: ['Enviar para análise', `Enviar <b>${esc(d.numero)}</b> para análise? Ela sai do rascunho e vai para o responsável <b>${esc(d.responsavel || '')}</b>.`, 'Enviar'], okMsg: `${d.numero} enviada para análise` });
+  if (nx === 'qualidade')
+    return changeStatus(nx, { confirmMsg: ['Autorizar e enviar à Qualidade', `Autorizar <b>${esc(d.numero)}</b> e enviar para a <b>Qualidade</b> agir e encerrar?`, 'Autorizar'], okMsg: `${d.numero} autorizada e enviada à Qualidade` });
+  await changeStatus(nx, nx === 'encerrada' ? { confirmMsg: ['Encerrar não conformidade', `Confirma o encerramento de <b>${esc(d.numero)}</b>? O registro ficará bloqueado para edição.`, 'Encerrar'] } : {});
 }
 
 /* ---------- Anexos ---------- */
@@ -1315,7 +1489,7 @@ async function compressImg(f) {
   return c.toDataURL('image/jpeg', 0.82);
 }
 async function addFiles(files) {
-  const d = S.draft; if (!d || S.isNew) return;
+  const d = S.draft; if (!d) return;
   for (const f of files) {
     try {
       let data, tipo;
@@ -1324,6 +1498,10 @@ async function addFiles(files) {
         if (f.size > 8 * 1024 * 1024) { toast(`${f.name}: PDF maior que 8 MB`, 'err'); continue; }
         data = await readFile(f); tipo = f.type;
       } else { toast(`${f.name}: formato não suportado`, 'err'); continue; }
+      if (S.isNew) {   // ainda não registrada: guarda para enviar ao registrar
+        (S.pendentes ||= []).push({ nome: f.name, tipo, data, tamanho: Math.round(data.length * 0.75) });
+        markDirty(); $('#anexos-body').innerHTML = anexosHTML(); bindDrop(); continue;
+      }
       toast(`Enviando ${f.name}…`, 'info');
       const r = await api('POST', `/ncs/${d.id}/anexos`, { nome: f.name, tipo, data });
       d.anexos.push(r.anexo);
@@ -1391,7 +1569,7 @@ async function printNC(d) {
     </section>
     ${blk('1. Identificação', `<div class="p-grid">
       ${f('Cliente / Fornecedor', d.cliente, 'c2')}${f('Nº Pedido / NF / OC', d.os)}${f('Data da ocorrência', fmtD(d.dataOcorrencia))}
-      ${f('Tipo', d.tipo)}${f('Origem / detecção', d.origem)}${f('Setor de origem da NC', d.setor)}${f('Classificação', d.classificacao)}
+      ${f('Origem / detecção', d.origem)}${f('Setor responsável pela NC', d.setor)}
       ${f('Item / equipamento / peça', d.item, 'c2')}${f('Quantidade afetada', d.quantidade)}${f('Reincidente', d.reincidente === 'sim' ? 'Sim ' + (d.ncRelacionada ? '(' + d.ncRelacionada + ')' : '') : 'Não')}
       ${f('Registrada em', `${fmtD(d.dataRegistro)} — ${d.criadoPor || ''}`, 'c2')}${f('Detectado por', d.detectadoPor)}${f('Responsável pelo tratamento', d.responsavel)}
       ${f('Prazo para tratamento', prazoTxt, 'c2')}
@@ -1400,7 +1578,7 @@ async function printNC(d) {
       <div><span>Prejuízo estimado</span><b>${money(d.custo)}</b></div>
       <div><span>Custo logístico</span><b>${d.custoLogHouve === 'sim' ? money(d.custoLog) : d.custoLogHouve === 'nao' ? 'Não houve' : '—'}</b></div>
       <div class="tot"><span>Prejuízo total</span><b>${money(custoTotal(d))}</b></div></div>`)}
-    ${blk('2. Ação imediata / contenção', `${txt(d.contencao?.descricao)}<div class="p-grid" style="margin-top:6px">${f('Disposição', d.contencao?.disposicao, 'c2')}${f('Responsável', d.contencao?.responsavel)}${f('Data', fmtD(d.contencao?.data))}</div>`)}
+    ${blk('2. Justificativa do responsável', `${txt(d.contencao?.descricao)}<div class="p-grid" style="margin-top:6px">${f('Data', fmtD(d.contencao?.data))}</div>`)}
     ${blk('3. Análise de causa', `
       ${(d.causa?.porques || []).some(x => x) ? `<h4>5 Porquês</h4><table class="p-tbl">${d.causa.porques.map((p, i) => p ? `<tr><th style="width:90px">${i + 1}º Por quê</th><td>${esc(p)}</td></tr>` : '').join('')}</table>` : ''}
       <h4>Causa raiz</h4>${txt(d.causa?.causaRaiz)}`)}
@@ -1408,7 +1586,7 @@ async function printNC(d) {
       ${d.acoes.map((a, i) => `<tr><td>${i + 1}</td><td>${esc(a.descricao)}<br><small>${esc(a.tipo)}</small></td><td>${esc(a.porque)}${a.como ? '<br><i>' + esc(a.como) + '</i>' : ''}</td><td>${esc(a.onde)}</td><td>${esc(a.responsavel)}</td><td>${fmtD(a.prazo)}</td><td>${a.custo ? money(a.custo) : '—'}</td><td>${esc(a.status)}${a.conclusao ? '<br>' + fmtD(a.conclusao) : ''}</td></tr>`).join('')}
       </tbody></table>` : txt(''))}
     ${!PLANO_ACAO ? '' : blk('5. Verificação de eficácia', `<div class="p-grid">${f('Resultado', d.eficacia?.resultado === 'eficaz' ? 'Eficaz' : d.eficacia?.resultado === 'ineficaz' ? 'Não eficaz' : 'Pendente')}${f('Verificado por', d.eficacia?.responsavel)}${f('Data', fmtD(d.eficacia?.data))}</div><h4>Evidência</h4>${txt(d.eficacia?.evidencia)}`)}
-    ${blk(PLANO_ACAO ? '6. Encerramento' : '4. Encerramento',`<div class="p-grid">${f('Data', fmtD(d.encerramento?.data))}${f('Encerrado por', d.encerramento?.por)}</div><h4>Comentários</h4>${txt(d.encerramento?.comentario)}`)}
+    ${blk(PLANO_ACAO ? '6. Encerramento' : '4. Encerramento',`<h4>Ação da Qualidade</h4>${txt(d.qualidadeAcao)}<div class="p-grid" style="margin-top:6px">${f('Data', fmtD(d.encerramento?.data))}${f('Encerrado por', d.encerramento?.por)}</div><h4>Comentários</h4>${txt(d.encerramento?.comentario)}`)}
     ${imgs.length ? blk('Evidências', `<div class="p-imgs">${imgs.map(a => `<figure><img src="${anexoURL(a.id)}" alt=""><figcaption>${esc(a.nome)}</figcaption></figure>`).join('')}</div>`) : ''}
     ${(() => {   // folha única: só os eventos relevantes (as mudanças de etapa já estão na linha do tempo)
       const ev = (d.historico || []).filter(e => !/^(Registro atualizado|Anexo |Status:|Não conformidade registrada)/.test(e.acao || '')).slice(-6);
@@ -1465,10 +1643,13 @@ async function renderUsers() {
   const v = $('#view');
   v.innerHTML = '<div class="empty-mini">Carregando…</div>';
   try { S.users = (await api('GET', '/users')).users; } catch (e) { v.innerHTML = `<div class="empty-mini">${esc(e.message)}</div>`; return; }
-  const u = S.users;
-  v.innerHTML = `
+  const u = S.users, adm = isAdmin();
+  const abas = `<div class="user-tabs"><button class="${S.userTab === 'logs' ? '' : 'on'}" data-act="user-tab" data-tab="usuarios">${icon('users')} Usuários</button><button class="${S.userTab === 'logs' ? 'on' : ''}" data-act="user-tab" data-tab="logs">${icon('clock')} Logs de acesso</button></div>`;
+  if (S.userTab === 'logs') { v.innerHTML = abas + '<div id="logs-view"></div>'; return renderLogs(); }
+  v.innerHTML = abas + `
+    ${adm ? '' : `<div class="banner mute" style="margin-bottom:14px">${icon('lock')}<div><b>Somente consulta.</b> Como Gestor, você vê todos os usuários, mas apenas o administrador cria, altera ou exclui.</div></div>`}
     <div class="toolbar"><p class="muted" style="flex:1;font-size:13px">${u.filter(x => x.ativo).length} usuário(s) ativo(s). O nome do usuário deve ser o mesmo usado no campo <b>Responsável</b> das NCs para que ele possa tratá-las.</p>
-      <button class="btn btn-primary" data-act="user-new">${icon('plus')} Novo usuário</button></div>
+      ${adm ? `<button class="btn btn-primary" data-act="user-new">${icon('plus')} Novo usuário</button>` : ''}</div>
     <div class="perfis">${Object.entries(PERFIS).map(([k, p]) => `<div class="card perfil">${pillPerfil(k)}<p>${p.desc}</p></div>`).join('')}</div>
     <div class="card table-wrap"><table class="tbl users"><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th>Último acesso</th><th></th></tr></thead><tbody>
       ${u.map(x => `<tr class="${x.ativo ? '' : 'inactive'}">
@@ -1477,15 +1658,48 @@ async function renderUsers() {
         <td>${pillPerfil(x.perfil)}</td>
         <td>${x.ativo ? `<span class="txt-ok">Ativo</span>${x.trocarSenha ? '<small class="muted"> · senha provisória</small>' : ''}` : '<span class="muted">Desativado</span>'}</td>
         <td class="hide-m">${x.ultimoAcesso ? fmtDT(x.ultimoAcesso) : '—'}</td>
-        <td class="row-actions"><button class="btn btn-ghost btn-sm" data-act="user-edit" data-id="${x.id}">${icon('edit')} Editar</button></td>
+        <td class="row-actions"><button class="btn btn-ghost btn-sm" data-act="user-logs" data-id="${x.id}" title="Ver os logs deste usuário">${icon('clock')} Logs</button>${adm ? `<button class="btn btn-ghost btn-sm" data-act="user-edit" data-id="${x.id}">${icon('edit')} Editar</button>` : ''}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
 }
+/* ---------- Logs de acesso (auditoria) ---------- */
+const LOG_TIPOS_AUD = { Acesso: '#38bdf8', NC: '#f5a524', 'Usuários': '#a78bfa', 'Configurações': '#f472b6' };
+async function renderLogs() {
+  const box = $('#logs-view'); if (!box) return;
+  const f = S.logF ||= { user: '', tipo: '', de: '', ate: '', q: '' };
+  const qs = new URLSearchParams(Object.entries(f).filter(([, x]) => x)); qs.set('limit', '1000');
+  box.innerHTML = `<div class="toolbar logs-tb">
+      <label class="search">${icon('search')}<input type="search" data-logf="q" value="${esc(f.q)}" placeholder="Buscar ação, detalhe, NC…"></label>
+      <select data-logf="user"><option value="">Todos os usuários</option>${S.users.map(x => `<option value="${x.id}" ${String(x.id) === f.user ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select>
+      <select data-logf="tipo"><option value="">Todos os tipos</option>${Object.keys(LOG_TIPOS_AUD).map(t => `<option ${t === f.tipo ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <input type="date" data-logf="de" value="${esc(f.de)}" title="De">
+      <input type="date" data-logf="ate" value="${esc(f.ate)}" title="Até">
+      <button class="btn btn-ghost" data-act="logs-csv">${icon('sheet')}<span>Exportar Excel</span></button>
+    </div><div class="empty-mini">Carregando…</div>`;
+  let r;
+  try { r = await api('GET', '/auditoria?' + qs.toString()); } catch (e) { box.lastElementChild.textContent = e.message; return; }
+  S.logRows = r.logs;
+  box.lastElementChild.outerHTML = `<p class="result-info">${r.logs.length < r.total ? `Mostrando os <b>${r.logs.length}</b> mais recentes de ${r.total}` : `<b>${r.total}</b> registro(s)`} · entradas, saídas, tentativas de acesso e alterações feitas no sistema.</p>
+    <div class="card table-wrap"><table class="tbl logs"><thead><tr><th>Data/hora</th><th>Usuário</th><th>Tipo</th><th>Evento</th><th>Detalhe</th><th class="hide-m">IP</th></tr></thead><tbody>
+    ${r.logs.map(l => `<tr class="${/falhou|inexistente|desativado/.test(l.acao) ? 'log-alerta' : ''}">
+      <td class="nowrap">${fmtDT(l.data)}</td>
+      <td>${esc(l.usuario || '—')}${l.login ? `<small>${esc(l.login)}</small>` : ''}</td>
+      <td><span class="pill" style="--c:${LOG_TIPOS_AUD[l.tipo] || '#93a7c0'}"><i></i>${esc(l.tipo)}</span></td>
+      <td class="tt">${l.ref && S.ncs.some(n => n.numero === l.ref) ? `<a class="linkbtn" href="#/nc/${S.ncs.find(n => n.numero === l.ref).id}">${esc(l.acao)}</a>` : esc(l.acao)}</td>
+      <td class="log-det">${esc(l.detalhe || '')}</td>
+      <td class="hide-m nowrap">${esc(l.ip || '')}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty-mini">Nenhum registro para esses filtros.</div></td></tr>'}
+    </tbody></table></div>`;
+}
+function exportLogsCSV() {
+  const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = [['Data/hora', 'Usuário', 'Login', 'Tipo', 'Evento', 'Detalhe', 'NC', 'IP'], ...(S.logRows || []).map(l => [fmtDT(l.data), l.usuario, l.login, l.tipo, l.acao, l.detalhe, l.ref, l.ip])];
+  download(`logs-de-acesso_${todayISO()}.csv`, '﻿' + rows.map(r => r.map(cell).join(';')).join('\r\n'), 'text/csv;charset=utf-8');
+  toast(`${rows.length - 1} registro(s) exportado(s)`);
+}
 const perfilOpts = Object.entries(PERFIS).map(([k, p]) => [k, p.label]);
 async function showTempPassword(nome, login, senha, email) {
-  // email: resultado do envio automático (servidor na nuvem); ausente na versão da rede interna
-  const aviso = !email ? ''
-    : email.enviado ? `<p class="txt-ok" style="margin-bottom:12px">✓ Senha enviada por e-mail para <b>${esc(email.para)}</b>.</p>`
+  const aviso = !email ? '' : email.enviado
+    ? `<p class="txt-ok" style="margin-bottom:12px">✓ Senha enviada por e-mail para <b>${esc(email.para)}</b>.</p>`
     : `<p style="margin-bottom:12px;color:var(--warn)">⚠ E-mail não enviado: ${esc(email.motivo || 'erro desconhecido')} Repasse os dados abaixo manualmente.</p>`;
   await modal({ title: 'Senha provisória', body: `${aviso}<p>${email?.enviado ? 'Dados enviados a' : 'Informe a'} <b>${esc(nome)}</b>:</p><div class="pw-box"><div><span>Endereço</span><b>${esc(location.origin)}</b></div><div><span>Usuário</span><b>${esc(login)}</b></div><div><span>Senha provisória</span><b>${esc(senha)}</b></div></div><p style="margin-top:12px">Ela será solicitada a trocar a senha no primeiro acesso. Esta senha não será exibida novamente.</p>`, actions: [{ label: 'Pronto', value: true, cls: 'btn-primary' }] });
 }
@@ -1508,13 +1722,33 @@ async function userEdit(id) {
     ${inp('E-mail', 'email', { value: x.email })}
     ${inp('Perfil', 'perfil', { opts: perfilOpts, value: x.perfil })}
     <label class="check c2"><input type="checkbox" name="ativo" ${x.ativo ? 'checked' : ''}> Usuário ativo (desmarque para bloquear o acesso)</label>
-    <label class="check c2"><input type="checkbox" name="resetSenha"> Gerar nova senha provisória</label>`,
+    <label class="check c2"><input type="checkbox" name="resetSenha"> Gerar nova senha provisória</label>
+    ${x.id !== S.me.id ? `<div class="c2 user-del-zone"><div><b>Excluir usuário</b><small>Para desligamento de funcionário. Remove o acesso de forma definitiva.</small></div>
+      <button type="button" class="btn btn-danger btn-sm" data-act="user-del" data-id="${x.id}">${icon('trash')} Excluir usuário</button></div>` : ''}`,
     'Salvar', async v => { res = await api('PUT', '/users/' + x.id, v); },
     { intro: `<p style="margin-bottom:12px">Usuário de acesso: <b style="color:var(--text)">${esc(x.login)}</b></p>` });
   if (!r) return;
   if (res.senha) await showTempPassword(r.nome, x.login, res.senha, res.email);
   else toast('Usuário atualizado');
   if (x.id === S.me.id) { S.me.nome = r.nome; S.me.perfil = r.perfil; renderUser(); renderNav(); }
+  renderUsers();
+}
+/** Exclusão definitiva (desligamento). As NCs mantêm o nome no histórico; quem ficou sem responsável é avisado. */
+async function userDelete(id) {
+  const x = S.users.find(u => u.id === +id); if (!x) return;
+  const abertas = S.ncs.filter(n => isOpen(n) && norm(n.responsavel) === norm(x.nome)).length;
+  const ok = await confirmBox('Excluir usuário',
+    `Excluir definitivamente <b>${esc(x.nome)}</b> (${esc(x.login)})?<br><br>
+     • O acesso é removido <b>na hora</b> e ele sai da hierarquia dos setores (gestor/equipe).<br>
+     • As NCs e o histórico continuam com o nome dele — nada é apagado.<br>
+     ${abertas ? `• <b class="txt-err">${abertas} NC(s) em aberto</b> estão sob responsabilidade dele: defina um novo responsável depois.<br>` : ''}
+     <br><b>Esta ação não pode ser desfeita.</b> Se for algo temporário (férias, afastamento), prefira desmarcar <i>Usuário ativo</i>.`,
+    'Excluir definitivamente');
+  if (!ok) return;
+  try {
+    const r = await api('DELETE', '/users/' + x.id);
+    toast(r.ncsAbertas ? `${x.nome} excluído. ${r.ncsAbertas} NC(s) em aberto precisam de novo responsável.` : `${x.nome} excluído.`, r.ncsAbertas ? 'info' : undefined);
+  } catch (e) { toast(e.message, 'err'); }
   renderUsers();
 }
 
@@ -1545,7 +1779,7 @@ function renderConfig() {
         <p class="cfg-note" style="margin-top:14px;margin-bottom:0">${S.ncs.length} NC(s) no servidor.</p>
       </div>
       <div class="card span-cfg"><h3>Setores / áreas: gestor e equipe</h3>
-        <p class="cfg-note">O <b>gestor da área</b> é quem <b>encerra</b> as NCs do setor e é sugerido como responsável ao registrar uma NC. A <b>equipe</b> pode tratar as NCs do seu setor. Gestor e equipe precisam ser usuários cadastrados. O <b>custo médio ADM / Operação</b> é usado como <b>prejuízo estimado</b> das NCs do setor quando ninguém informa um valor.</p>
+        <p class="cfg-note">O <b>gestor da área</b> é quem <b>autoriza</b> as NCs do setor (depois a Qualidade age e encerra) e é sugerido como responsável ao registrar uma NC. A <b>equipe</b> pode tratar as NCs do seu setor. Gestor e equipe precisam ser usuários cadastrados. O <b>custo médio ADM / Operação</b> é usado como <b>prejuízo estimado</b> das NCs do setor quando ninguém informa um valor.</p>
         <div class="setor-tbl">
           <div class="setor-head"><span>Setor</span><span>Gestor da área</span><span>Equipe (usuários)</span><span>Custo médio ADM / Operação</span><span></span></div>
           ${c.setores.map((s, i) => {
@@ -1563,9 +1797,7 @@ function renderConfig() {
         </div>
         <form class="addline" data-add="setores" style="margin-top:12px"><input placeholder="Novo setor…" required><button class="btn btn-secondary">${icon('plus')}</button></form>
       </div>
-      ${listCard('tipos', 'Tipos de não conformidade', 'Classificação da natureza da NC.')}
       ${listCard('origens', 'Origens', 'Como a NC foi detectada.')}
-      ${listCard('disposicoes', 'Disposições do produto', 'O que foi feito com o produto não conforme (seção Contenção).')}
       ${listCard('responsaveis', 'Responsáveis externos', 'Pessoas sem acesso ao sistema que podem constar como responsáveis (os usuários já aparecem automaticamente).')}
     </div>`;
   $$('form[data-add]').forEach(fm => fm.addEventListener('submit', async e => {
@@ -1597,6 +1829,11 @@ function renderConfig() {
     });
   });
   $('#cfg-pre').addEventListener('input', e => { $('#cfg-ex').textContent = `${e.target.value.trim().toUpperCase() || 'NC'}-${new Date().getFullYear()}-001`; });
+  if (!isAdmin()) {   // Gestor: somente consulta
+    $$('#view input, #view select, #view textarea, #view button').forEach(el => { el.disabled = true; });
+    $$('#view .chip button, #view form.addline, #view .cfg-actions, #view [data-act="save-pre"]').forEach(el => el.remove());
+    $('#view').insertAdjacentHTML('afterbegin', `<div class="banner mute" style="margin-bottom:14px">${icon('lock')}<div><b>Somente consulta.</b> Como Gestor, você vê todas as configurações, mas apenas o administrador pode alterá-las.</div></div>`);
+  }
 }
 async function saveCfg(patch) {
   try { S.cfg = (await api('PUT', '/config', patch)).cfg; return true; } catch (e) { toast(e.message, 'err'); return false; }
@@ -1612,10 +1849,10 @@ function download(name, content, type) {
 function exportCSV(list) {
   const cols = [
     ['Número', n => n.numero], ['Data ocorrência', n => fmtD(n.dataOcorrencia)], ['Data registro', n => fmtD(n.dataRegistro)], ['Registrado por', n => n.criadoPor], ['Título', n => n.titulo],
-    ['Descrição', n => n.descricao], ['Tipo', n => n.tipo], ['Origem', n => n.origem], ['Classificação', n => n.classificacao], ['Setor de origem da NC', n => n.setor],
+    ['Descrição', n => n.descricao], ['Origem', n => n.origem], ['Setor responsável pela NC', n => n.setor],
     ['Severidade', n => SEV[n.severidade]?.label], ['Cliente / Fornecedor', n => n.cliente], ['Nº Pedido/NF/OC', n => n.os], ['Item', n => n.item], ['Quantidade', n => n.quantidade],
     ['Detectado por', n => n.detectadoPor], ['Responsável', n => n.responsavel], ['Prazo', n => fmtD(n.prazo)], ['Status', n => STATUS[n.status].label],
-    ['Vencida', n => isOverdue(n) ? 'Sim' : 'Não'], ['Reincidente', n => n.reincidente === 'sim' ? 'Sim' : 'Não'], ['Contenção', n => n.contencao?.descricao], ['Disposição', n => n.contencao?.disposicao],
+    ['Vencida', n => isOverdue(n) ? 'Sim' : 'Não'], ['Reincidente', n => n.reincidente === 'sim' ? 'Sim' : 'Não'], ['Justificativa do responsável', n => n.contencao?.descricao],
     ['Causa raiz', n => n.causa?.causaRaiz], ['Nº ações', n => (n.acoes || []).length], ['Ações concluídas', n => (n.acoes || []).filter(a => a.status === 'Concluída').length],
     ['Eficácia', n => n.eficacia?.resultado === 'eficaz' ? 'Eficaz' : n.eficacia?.resultado === 'ineficaz' ? 'Não eficaz' : 'Pendente'],
     ['Data encerramento', n => fmtD(n.encerramento?.data)], ['Encerrado por', n => n.encerramento?.por], ['Prejuízo estimado (R$)', n => (+n.custo || 0).toFixed(2).replace('.', ',')],
@@ -1689,6 +1926,12 @@ function bindGlobal() {
     const el = e.target;
     if (el.dataset.filter) { S.filters[el.dataset.filter] = el.value; renderTable(); return; }
     if ('dashPer' in el.dataset) { S.dashPer = el.value; renderDashboard(); return; }
+    if (el.dataset.hf) { S.hf[el.dataset.hf] = el.value; drawHistoricos(); return; }
+    if (el.dataset.logf) {   // filtros dos logs de acesso (busca com pequena espera enquanto digita)
+      (S.logF ||= {})[el.dataset.logf] = el.value;
+      clearTimeout(S.logT); S.logT = setTimeout(() => { const foco = el.dataset.logf; renderLogs().then(() => { const e2 = $(`[data-logf="${foco}"]`); if (e2 && foco === 'q') { e2.focus(); e2.setSelectionRange(e2.value.length, e2.value.length); } }); }, el.dataset.logf === 'q' ? 350 : 0);
+      return;
+    }
     if (el.dataset.kf) { S.kf[el.dataset.kf] = el.value; kfSave(); drawBoard(); return; }
     if (el.dataset.log) { S.logFilter[el.dataset.log] = el.value; renderLog(); return; }
     const f = el.dataset.f; if (!f || !S.draft || el.readOnly) return;
@@ -1728,6 +1971,9 @@ function bindGlobal() {
     switch (act) {
       case 'open': location.hash = '#/nc/' + t.dataset.id; break;
       case 'goto-filter': gotoList(t.dataset.k, t.dataset.v); break;
+      case 'ksort': e.stopPropagation(); kSortToggle(t.dataset.col); break;
+      case 'hist-ord': S.hf.ord = S.hf.ord === 'asc' ? 'desc' : 'asc'; drawHistoricos(); break;
+      case 'hist-csv': exportCSV(S.histList || []); break;
       case 'kf-clear': S.kf = KF_VAZIO(); kfSave(); renderKanban(); break;
       case 'sort': S.sort = { k: t.dataset.k, dir: S.sort.k === t.dataset.k ? -S.sort.dir : 1 }; renderTable(); break;
       case 'rm-filter': if (t.dataset.k === 'periodo') { S.filters.de = S.filters.ate = ''; } else S.filters[t.dataset.k] = ''; renderList(); break;
@@ -1745,6 +1991,10 @@ function bindGlobal() {
         if ((a.descricao || '').trim() && !(await confirmBox('Remover ação', `Remover a ação “${esc(a.descricao.slice(0, 80))}”?`, 'Remover', true))) break;
         d.acoes.splice(+t.dataset.i, 1); $('#acoes-body').innerHTML = acoesHTML(); $('#acoes-prog').innerHTML = acaoProg(d); markDirty(); break;
       }
+      case 'del-pend': {   // remove um anexo ainda não enviado (NC em abertura)
+        e.preventDefault(); (S.pendentes || []).splice(+t.dataset.i, 1);
+        $('#anexos-body').innerHTML = anexosHTML(); bindDrop(); break;
+      }
       case 'del-anexo': {
         e.stopPropagation(); e.preventDefault();
         const a = d.anexos.find(x => x.id === t.dataset.id); if (!a) break;
@@ -1759,6 +2009,20 @@ function bindGlobal() {
       }
       case 'view-anexo': { const a = d.anexos.find(x => x.id === t.dataset.id); a && openAnexo(a); break; }
       case 'save': saveDraft(); break;
+      case 'save-rascunho': saveDraft({ rascunho: true }); break;
+      case 'online-toggle': $('#online')?.classList.toggle('open'); break;
+      case 'notif-toggle': $('#notif-popup')?.remove(); $('#notif')?.classList.toggle('open'); break;
+      case 'notif-todas': notifMarcar({ todas: true }); break;
+      case 'notif-fechar': $('#notif-popup')?.remove(); break;
+      case 'notif-open': {
+        $('#notif-popup')?.remove(); $('#notif')?.classList.remove('open');
+        notifMarcar({ ids: [t.dataset.id] });
+        if (t.dataset.nc) location.hash = '#/nc/' + t.dataset.nc;
+        break;
+      }
+      case 'user-tab': S.userTab = t.dataset.tab; renderUsers(); break;
+      case 'user-logs': S.userTab = 'logs'; S.logF = { user: t.dataset.id, tipo: '', de: '', ate: '', q: '' }; renderUsers(); break;
+      case 'logs-csv': exportLogsCSV(); break;
       case 'advance': advance(); break;
       case 'reload-draft': { const srv = S.ncs.find(n => n.id === d.id); if (srv && (!S.dirty || confirm('Descartar suas alterações e carregar a versão atual?'))) loadDraft(srv); break; }
       case 'back-analise': {
@@ -1773,7 +2037,8 @@ function bindGlobal() {
       case 'devolver': {
         const motivo = await askText('Devolver para análise', `Informe o que precisa ser revisto em <b>${esc(d.numero)}</b>. A NC volta para <b>Em análise</b>.`, 'Motivo da devolução');
         if (motivo == null) break;
-        changeStatus('analise', { nota: 'Autorização negada — devolvida para análise: ' + (motivo || 'motivo não informado'), okMsg: `${d.numero} devolvida para análise` });
+        const quem = d.status === 'qualidade' ? 'Qualidade devolveu para análise' : 'Autorização negada — devolvida para análise';
+        changeStatus('analise', { nota: quem + ': ' + (motivo || 'motivo não informado'), okMsg: `${d.numero} devolvida para análise` });
         break;
       }
       case 'reopen':
@@ -1827,6 +2092,7 @@ function bindGlobal() {
       }
       case 'user-new': userNew(); break;
       case 'user-edit': userEdit(t.dataset.id); break;
+      case 'user-del': { const id = t.dataset.id; $('#modal-root [data-x]')?.click(); setTimeout(() => userDelete(id), 50); break; }
       case 'export-json': window.location.href = apiURL('/backup'); toast('Gerando backup…', 'info'); break;
       case 'import-json': $('#import-file').click(); break;
       case 'load-demo': {

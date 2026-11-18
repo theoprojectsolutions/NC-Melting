@@ -726,3 +726,121 @@ html[data-theme="light"] .p-toolbar{background:#fff; border-bottom-color:var(--l
 .dash-grid .card .hbars::-webkit-scrollbar-track,.dash-grid .card .att-list::-webkit-scrollbar-track{background:rgba(96,160,230,.08); border-radius:8px}
 .dash-grid .card .hbars::-webkit-scrollbar-thumb,.dash-grid .card .att-list::-webkit-scrollbar-thumb{background:rgba(58,168,255,.45); border-radius:8px}
 .dash-grid .card .hbars::-webkit-scrollbar-thumb:hover,.dash-grid .card .att-list::-webkit-scrollbar-thumb:hover{background:rgba(58,168,255,.75)}
+/* Excluir usuário (modal Editar) */
+.user-del-zone{display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:6px; padding:12px 14px; border:1px solid rgba(244,63,94,.35); background:rgba(244,63,94,.07); border-radius:10px}
+.user-del-zone b{display:block; color:var(--err); font-size:13px}
+.user-del-zone small{display:block; color:var(--dim); font-size:11.5px; margin-top:2px}
+.nav-label small{text-transform:none; letter-spacing:0; font-weight:500}
+/* Destaque: gestor da área (formulário da NC) */
+.gestor-area{align-self:end; display:flex; flex-direction:column; gap:6px; padding:10px 14px; border-radius:12px;
+  background:linear-gradient(110deg, rgba(31,127,214,.18), rgba(58,168,255,.05)); border:1px solid rgba(58,168,255,.45);
+  box-shadow:0 0 0 3px rgba(58,168,255,.06), 0 8px 24px -14px rgba(58,168,255,.6); min-height:64px}
+.gestor-area .ga-lbl{display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--glow2)}
+.gestor-area .ga-lbl .ic{width:14px; height:14px}
+.gestor-area .ga-nome{display:flex; align-items:center; gap:10px}
+.gestor-area .ga-nome b{display:block; font-size:16px; color:var(--text)}
+.gestor-area .ga-nome small{display:block; font-size:11.5px; color:var(--dim)}
+.gestor-area .ga-vazio{font-size:12.5px; color:var(--dim)}
+/* Cartão do Kanban: gestor da área + setor no canto inferior direito */
+.kgest{margin-top:-4px}
+.kgest .avatar.sm{background:transparent; border:1.5px solid rgba(58,168,255,.6); color:var(--glow2)}
+.kgest.none span:last-child{color:var(--dim); font-weight:500; font-style:italic}
+.kfoot{justify-content:flex-end}
+.kfoot .tag{margin-left:auto}
+/* Usuários online (topo) */
+.topbar-actions{align-items:center}
+.online-box{position:relative}
+.online-btn{display:flex; align-items:center; gap:10px; padding:5px 12px 5px 10px; border-radius:999px; border:1px solid var(--line2); background:rgba(31,127,214,.08); color:var(--text); font:inherit; cursor:pointer}
+.online-btn:hover{background:rgba(31,127,214,.16)}
+.online-dot{width:8px; height:8px; border-radius:50%; background:#22c55e; box-shadow:0 0 0 3px rgba(34,197,94,.18), 0 0 8px rgba(34,197,94,.7); flex:none}
+.online-avs{display:flex}
+.online-avs .avatar.sm{width:26px; height:26px; font-size:9.5px; margin-left:-7px; border:2px solid var(--bg); background:var(--pc, var(--brand))}
+.online-avs .avatar.sm:first-child{margin-left:0}
+.online-avs .avatar.more{background:var(--surface3); color:var(--glow2)}
+.online-n{font-size:12.5px; color:var(--muted); white-space:nowrap}
+.online-n b{color:var(--text)}
+.online-pop{display:none; position:absolute; right:0; top:calc(100% + 8px); z-index:50; width:270px; max-height:360px; overflow:auto; padding:10px; border-radius:12px; background:var(--surface); border:1px solid var(--line2); box-shadow:var(--shadow)}
+.online-box.open .online-pop{display:block}
+.online-h{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:4px 6px 8px}
+.online-h .ic{width:15px; height:15px}
+.online-h small{margin-left:auto; color:var(--glow2)}
+.online-row{display:flex; align-items:center; gap:9px; padding:7px 6px; border-radius:8px}
+.online-row:hover{background:rgba(31,127,214,.08)}
+.online-row .avatar.sm{width:28px; height:28px; font-size:10px; background:var(--pc, var(--brand))}
+.online-row b{display:block; font-size:13px}
+.online-row b small{font-weight:500; color:var(--dim)}
+.online-row div small{display:block; font-size:11px; color:var(--dim)}
+.online-note{font-size:11px; color:var(--dim); padding:6px 6px 2px; margin:0}
+@media (max-width:720px){ .online-n{display:none} .online-avs .avatar.sm:not(:first-child){display:none} }
+/* Topo: "+ Nova NC" ao lado do título; online na ponta direita; nome completo ao passar o mouse */
+.topbar .top-new{margin-left:6px}
+.online-avs .avatar.sm{position:relative; cursor:default}
+.online-avs .avatar.sm[data-nome]:hover::after{content:attr(data-nome); position:absolute; top:calc(100% + 8px); right:-6px; z-index:60;
+  white-space:nowrap; padding:5px 10px; border-radius:8px; background:#0b1524; color:#e8eff9; border:1px solid var(--line2);
+  font-size:12px; font-weight:600; letter-spacing:0; box-shadow:var(--shadow); pointer-events:none}
+.online-avs .avatar.sm[data-nome]:hover{z-index:2; transform:translateY(-1px)}
+html[data-theme="light"] .online-avs .avatar.sm[data-nome]:hover::after{background:#fff; color:#0f1d30}
+/* Usuários: abas e logs de acesso */
+.user-tabs{display:flex; gap:6px; margin-bottom:16px; border-bottom:1px solid var(--line)}
+.user-tabs button{display:flex; align-items:center; gap:7px; padding:10px 16px; border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); font:inherit; font-weight:600; cursor:pointer; margin-bottom:-1px}
+.user-tabs button .ic{width:16px; height:16px}
+.user-tabs button.on{color:var(--text); border-bottom-color:var(--glow)}
+.user-tabs button:hover{color:var(--text)}
+.logs-tb{flex-wrap:wrap}
+.logs-tb .search{flex:1 1 240px}
+.logs-tb select,.logs-tb input[type=date]{width:auto; min-width:150px}
+.tbl.logs td{vertical-align:top; font-size:13px}
+.tbl.logs td small{display:block; color:var(--dim); font-size:11px}
+.tbl.logs .nowrap{white-space:nowrap}
+.tbl.logs .log-det{color:var(--muted); font-size:12px; max-width:520px; word-break:break-word}
+.tbl.logs tr.log-alerta td{background:rgba(244,63,94,.07)}
+.tbl.logs tr.log-alerta .tt{color:var(--err)}
+.row-actions{white-space:nowrap}
+.row-actions .btn + .btn{margin-left:6px}
+/* Kanban: setinha de ordenação pela data da NC */
+.kcol-h .ksort{margin-left:auto; margin-right:6px; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; border-radius:6px; border:1px solid var(--line2); background:transparent; color:var(--dim); font:inherit; font-size:13px; font-weight:700; line-height:1; cursor:pointer}
+.kcol-h .ksort:hover{color:var(--text); background:rgba(31,127,214,.12)}
+.kcol-h .ksort.on{color:#fff; background:var(--c, var(--brand)); border-color:var(--c, var(--brand))}
+/* Cartão do Kanban: data de abertura no rodapé (à esquerda do setor) */
+.kfoot{justify-content:space-between; align-items:center}
+.kdata{display:inline-flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted); white-space:nowrap}
+.kdata .ic{width:13px; height:13px; opacity:.8}
+/* Notificações: sino no topo + pop-up */
+.notif-box{position:relative}
+.notif-btn{position:relative; width:38px; height:38px; display:grid; place-items:center; border-radius:50%; border:1px solid var(--line2); background:rgba(31,127,214,.08); color:var(--muted); cursor:pointer}
+.notif-btn:hover{color:var(--text); background:rgba(31,127,214,.16)}
+.notif-btn .ic{width:18px; height:18px}
+.notif-btn.tem{color:var(--warn); border-color:rgba(245,165,36,.5)}
+.notif-btn.tem .ic{animation:sino 2.4s ease-in-out infinite; transform-origin:50% 10%}
+@keyframes sino{0%,80%,100%{transform:rotate(0)} 84%{transform:rotate(14deg)} 88%{transform:rotate(-12deg)} 92%{transform:rotate(8deg)} 96%{transform:rotate(-4deg)}}
+@media (prefers-reduced-motion:reduce){ .notif-btn.tem .ic{animation:none} }
+.notif-badge{position:absolute; top:-5px; right:-6px; min-width:19px; height:19px; padding:0 5px; border-radius:999px; background:var(--err); color:#fff; font-size:10.5px; font-weight:800; display:grid; place-items:center; border:2px solid var(--bg)}
+.notif-pop{display:none; position:absolute; right:0; top:calc(100% + 8px); z-index:55; width:360px; max-height:440px; overflow:auto; padding:8px; border-radius:12px; background:var(--surface); border:1px solid var(--line2); box-shadow:var(--shadow)}
+.notif-box.open .notif-pop{display:block}
+.notif-h{display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:6px 8px 10px; border-bottom:1px solid var(--line); margin-bottom:4px}
+.notif-h .ic{width:15px; height:15px}
+.notif-h small{color:var(--glow2); text-transform:none; letter-spacing:0; font-weight:600}
+.notif-h .linkbtn{margin-left:auto; text-transform:none; letter-spacing:0; font-size:12px}
+.notif-row{display:flex; gap:10px; width:100%; text-align:left; padding:9px 8px; border:0; border-radius:8px; background:none; color:var(--muted); font:inherit; cursor:pointer}
+.notif-row:hover{background:rgba(31,127,214,.08)}
+.notif-row b{display:block; font-size:13px; font-weight:500; color:var(--muted)}
+.notif-row span{display:block; font-size:12px; color:var(--dim); margin-top:1px}
+.notif-row small{display:block; font-size:11px; color:var(--dim); margin-top:3px}
+.notif-dot{width:8px; height:8px; margin-top:6px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line2)}
+.notif-row.nova{background:rgba(31,127,214,.07)}
+.notif-row.nova b{font-weight:700; color:var(--text)}
+.notif-row.nova .notif-dot{background:var(--glow); border-color:var(--glow); box-shadow:0 0 8px rgba(58,168,255,.7)}
+.notif-popup{position:fixed; right:22px; top:78px; z-index:400; width:min(400px, calc(100vw - 32px)); display:grid; grid-template-columns:auto 1fr; gap:10px 14px; padding:16px 18px;
+  border-radius:14px; background:var(--surface); border:1px solid rgba(245,165,36,.55); box-shadow:0 20px 50px -15px rgba(0,0,0,.8), 0 0 0 4px rgba(245,165,36,.1); animation:npIn .35s ease-out}
+@keyframes npIn{from{opacity:0; transform:translateY(-10px) scale(.98)} to{opacity:1; transform:none}}
+.notif-popup .np-ico{width:40px; height:40px; border-radius:50%; display:grid; place-items:center; background:rgba(245,165,36,.15); color:var(--warn)}
+.notif-popup .np-ico .ic{width:20px; height:20px}
+.notif-popup .np-txt small{display:block; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--warn)}
+.notif-popup .np-txt b{display:block; font-size:15px; margin-top:2px}
+.notif-popup .np-txt span{display:block; font-size:13px; color:var(--muted); margin-top:2px}
+.notif-popup .np-txt em{display:block; font-style:normal; font-size:11.5px; color:var(--dim); margin-top:4px}
+.notif-popup .np-acts{grid-column:1/-1; display:flex; justify-content:flex-end; gap:8px}
+/* Históricos */
+.tbl.hist tbody tr{cursor:pointer}
+.tbl.hist td small{display:block; font-size:11px; color:var(--dim)}
+.tbl.hist .th-sort{cursor:pointer; color:var(--glow2)}
