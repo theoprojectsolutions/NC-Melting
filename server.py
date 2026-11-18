@@ -39,14 +39,18 @@ FILE_TYPES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application
 # Plano de ação (5W2H) e verificação de eficácia desativados por enquanto (fluxo simplificado).
 # Para reativar: True aqui e PLANO_ACAO = true no public/app.js.
 PLANO_ACAO = False
-FLOW = (['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'encerrada'] if PLANO_ACAO
-        else ['aberta', 'analise', 'autorizacao', 'encerrada'])
-STATUS_LABEL = {'aberta': 'Aberta', 'analise': 'Em análise', 'acao': 'Ação em andamento',
-                'verificacao': 'Verificação de eficácia', 'autorizacao': 'Aguardando autorização', 'encerrada': 'Encerrada', 'cancelada': 'Cancelada'}
-PERFIS = ('admin', 'qualidade', 'colaborador')
+FLOW = (['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'qualidade', 'encerrada'] if PLANO_ACAO
+        else ['aberta', 'analise', 'autorizacao', 'qualidade', 'encerrada'])
+STATUS_LABEL = {'aberta': 'Rascunho', 'analise': 'Em análise', 'acao': 'Ação em andamento',
+                'verificacao': 'Verificação de eficácia', 'autorizacao': 'Aguardando autorização', 'qualidade': 'Qualidade',
+                'encerrada': 'Encerrada', 'cancelada': 'Cancelada'}
+ENCERRA = ('admin', 'gestor', 'qualidade')   # perfis que encerram a NC (depois da etapa "Qualidade")
+PERFIS = ('admin', 'gestor', 'qualidade', 'colaborador')
+VE_TUDO = ('admin', 'gestor')   # gestor: vê todo o cenário (como o admin), mas sem poderes de administração
+VE_TODAS_NCS = ('admin', 'gestor', 'qualidade')   # enxergam todas as NCs; o colaborador vê só as dele
 GESTAO = ('admin', 'qualidade')
-REQUIRED = [('titulo', 'Título'), ('descricao', 'Descrição'), ('dataOcorrencia', 'Data da ocorrência'), ('tipo', 'Tipo'),
-            ('setor', 'Setor de origem da NC'), ('responsavel', 'Responsável'), ('severidade', 'Severidade'),
+REQUIRED = [('titulo', 'Título'), ('descricao', 'Descrição'), ('dataOcorrencia', 'Data da ocorrência'),
+            ('setor', 'Setor responsável pela NC'), ('responsavel', 'Responsável'), ('severidade', 'Severidade'),
             ('cliente', 'Cliente / Fornecedor'), ('origem', 'Origem / como foi detectada')]
 MANAGED = {'id', 'numero', 'status', 'version', 'updatedAt', 'anexos', 'historico', 'criadoPor', 'criadoPorId',
            'createdAt', 'dataRegistro', 'encerramento'}
@@ -71,8 +75,6 @@ CONTENT_TYPES = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset
                  '.json': 'application/json', '.webmanifest': 'application/manifest+json'}
 
 DB_PATH: Path = None  # definido em main()
-# --proxy: publicado na internet atrás do nginx com HTTPS (cookie Secure e IP real do usuário via X-Real-IP)
-BEHIND_PROXY = False
 LOGIN_FAILS = {}
 LOGIN_LOCK = threading.Lock()
 
@@ -131,6 +133,15 @@ CREATE TABLE IF NOT EXISTS anexos(
   tamanho INTEGER NOT NULL, conteudo BLOB NOT NULL, criado_em TEXT NOT NULL, por TEXT);
 CREATE INDEX IF NOT EXISTS ix_anexos_nc ON anexos(nc_id);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS auditoria(
+  id INTEGER PRIMARY KEY, data TEXT NOT NULL, user_id INTEGER, usuario TEXT NOT NULL DEFAULT '', login TEXT DEFAULT '',
+  tipo TEXT NOT NULL, acao TEXT NOT NULL, detalhe TEXT DEFAULT '', ref TEXT DEFAULT '', ip TEXT DEFAULT '');
+CREATE INDEX IF NOT EXISTS ix_aud_data ON auditoria(data);
+CREATE INDEX IF NOT EXISTS ix_aud_user ON auditoria(user_id);
+CREATE TABLE IF NOT EXISTS notificacoes(
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, data TEXT NOT NULL, titulo TEXT NOT NULL, texto TEXT DEFAULT '',
+  nc_id TEXT DEFAULT '', ref TEXT DEFAULT '', de TEXT DEFAULT '', lida INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS ix_notif_user ON notificacoes(user_id, id);
 """
 
 
@@ -208,6 +219,85 @@ def new_session(con, user_id):
     return token
 
 
+# ---------------------------------------------------------------- auditoria (logs de acesso e alterações)
+AUD_TIPOS = ('Acesso', 'NC', 'Usuários', 'Configurações')
+
+
+def audit(con, h, user, tipo, acao, detalhe='', ref='', login=''):
+    """Registra um evento na trilha de auditoria (não quebra a operação se falhar)."""
+    try:
+        ip = h.client_address[0] if h is not None else ''
+        con.execute('INSERT INTO auditoria(data,user_id,usuario,login,tipo,acao,detalhe,ref,ip) VALUES(?,?,?,?,?,?,?,?,?)',
+                    (now_iso(), user['id'] if user else None, user['nome'] if user else '', (user['login'] if user else login) or '',
+                     tipo, str(acao)[:300], str(detalhe or '')[:4000], str(ref or '')[:60], ip))
+    except Exception:
+        traceback.print_exc()
+
+
+def resumo_alteracoes(alt, limite=12):
+    if not alt:
+        return ''
+    itens = [f"{a.get('campo')}: {a.get('de') or 'vazio'} → {a.get('para') or 'vazio'}" for a in alt[:limite]]
+    return '; '.join(itens) + (f' (+{len(alt) - limite} campo(s))' if len(alt) > limite else '')
+
+
+# ---------------------------------------------------------------- notificações
+def notificar(con, actor, nomes, titulo, texto='', nc_id='', ref=''):
+    """Cria notificação para os usuários (por nome, só ativos), exceto para quem fez a ação."""
+    alvo = {norm(n) for n in nomes if str(n or '').strip()}
+    if not alvo:
+        return
+    for r in con.execute('SELECT id, nome FROM users WHERE ativo=1').fetchall():
+        if norm(r['nome']) in alvo and (actor is None or r['id'] != actor['id']):
+            con.execute('INSERT INTO notificacoes(user_id,data,titulo,texto,nc_id,ref,de) VALUES(?,?,?,?,?,?,?)',
+                        (r['id'], now_iso(), titulo[:200], str(texto or '')[:500], nc_id, ref, actor['nome'] if actor else ''))
+
+
+def nomes_perfil(con, perfil):
+    return [r[0] for r in con.execute('SELECT nome FROM users WHERE ativo=1 AND perfil=?', (perfil,))]
+
+
+def notificar_etapa(con, actor, d, nc_id, numero, frm, to, cfg):
+    """Avisa quem precisa agir quando a NC muda de etapa."""
+    tit = d.get('titulo') or ''
+    if to == 'analise' and frm == 'aberta':
+        notificar(con, actor, [d.get('responsavel')], f'Nova NC para você tratar: {numero}', tit, nc_id, numero)
+    elif to == 'analise' and frm in ('autorizacao', 'qualidade'):
+        notificar(con, actor, [d.get('responsavel')], f'{numero} foi devolvida para análise', tit, nc_id, numero)
+    elif to == 'autorizacao':
+        g = gestor_setor(cfg, d.get('setor'))
+        notificar(con, actor, [g] if g else nomes_perfil(con, 'qualidade'), f'{numero} aguarda a sua autorização', tit, nc_id, numero)
+    elif to == 'qualidade':
+        notificar(con, actor, nomes_perfil(con, 'qualidade'), f'{numero} autorizada: ação da Qualidade', tit, nc_id, numero)
+    elif to == 'encerrada':
+        notificar(con, actor, [d.get('responsavel'), d.get('criadoPor')], f'{numero} foi encerrada', tit, nc_id, numero)
+
+
+def notif_resumo(con, user):
+    rows = con.execute('SELECT * FROM notificacoes WHERE user_id=? ORDER BY id DESC LIMIT 40', (user['id'],)).fetchall()
+    nao = con.execute('SELECT COUNT(*) FROM notificacoes WHERE user_id=? AND lida=0', (user['id'],)).fetchone()[0]
+    return {'naoLidas': nao, 'lista': [{k: r[k] for k in ('id', 'data', 'titulo', 'texto', 'nc_id', 'ref', 'de')} | {'lida': bool(r['lida'])} for r in rows]}
+
+
+# ---------------------------------------------------------------- usuários online (em memória)
+ONLINE = {}                 # user_id -> (último acesso, nome, perfil)
+ONLINE_LOCK = threading.Lock()
+ONLINE_JANELA = 90          # segundos sem atividade para sair da lista (o navegador consulta a cada 15 s)
+
+
+def marca_online(u):
+    with ONLINE_LOCK:
+        ONLINE[u['id']] = (time.time(), u['nome'], u['perfil'])
+
+
+def online_list():
+    agora = time.time()
+    with ONLINE_LOCK:
+        for uid in [k for k, v in ONLINE.items() if agora - v[0] > ONLINE_JANELA]:
+            ONLINE.pop(uid, None)
+        return sorted(({'id': k, 'nome': v[1], 'perfil': v[2]} for k, v in ONLINE.items()), key=lambda x: norm(x['nome']))
+
+
 def active_admins(con, excluding=None):
     q = "SELECT COUNT(*) FROM users WHERE perfil='admin' AND ativo=1"
     args = ()
@@ -274,6 +364,28 @@ def check_custo_log(d, nova=False):
         d['custoLog'] = ''
 
 
+SEV_VALIDAS = ('baixa', 'media', 'alta')   # "critica" saiu de uso; NCs antigas com ela continuam como estão
+
+
+def check_severidade(d, old=None):
+    s = d.get('severidade') or ''
+    if s and s not in SEV_VALIDAS and not (old is not None and old.get('severidade') == s):
+        raise ApiError(422, 'Severidade inválida: use Baixa, Média ou Alta.', campos=['severidade'])
+
+
+def check_rascunho(con, d, old=None):
+    """Rascunho (status "aberta"): só o título é obrigatório; o resto é cobrado ao enviar para análise."""
+    if not str(d.get('titulo') or '').strip():
+        raise ApiError(422, 'Para salvar o rascunho, informe ao menos o título.', campos=['titulo'])
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', str(d.get('dataOcorrencia') or '')):
+        d['dataOcorrencia'] = today()
+    check_severidade(d, old)
+    if str(d.get('responsavel') or '').strip():
+        check_responsavel(con, d, old)
+    if (d.get('custoLogHouve') or '') == 'sim' and not _num(d.get('custoLog')) > 0:
+        raise ApiError(422, 'Informe o valor do custo logístico.', campos=['custoLog'])
+
+
 def check_required(d):
     falta = [(f, l) for f, l in REQUIRED if not str(d.get(f) or '').strip()]
     if falta:
@@ -294,11 +406,15 @@ def missing_for(d, status):
     m = []
     acoes = d.get('acoes') or []
     if status == 'aberta':
-        if not str((d.get('contencao') or {}).get('descricao') or '').strip():
-            m.append('Descreva a ação imediata / contenção (seção 2).')
+        pass   # quem abre só registra; a justificativa é do responsável, na etapa "Em análise"
+    elif status == 'qualidade':
+        if not str(d.get('qualidadeAcao') or '').strip():
+            m.append('Descreva a ação da Qualidade para resolver a não conformidade (seção Encerramento).')
     elif status == 'analise':
+        if not str((d.get('contencao') or {}).get('descricao') or '').strip():
+            m.append('Preencha a justificativa do responsável (seção 3).')
         if not str((d.get('causa') or {}).get('causaRaiz') or '').strip():
-            m.append('Informe a causa raiz (seção 3).')
+            m.append('Informe a causa raiz (seção 4).')
         if not PLANO_ACAO:
             pass
         elif not acoes:
@@ -343,10 +459,12 @@ def pode_encerrar(user, d, cfg):
 def can_view(user, d, status, cfg=None):
     """Visibilidade: o administrador vê todo o cenário; os demais veem só as NCs que são deles —
     responsável, quem registrou, responsável por alguma ação, gestor da área ou quem precisa autorizar o encerramento."""
-    if user['perfil'] == 'admin':
+    if user['perfil'] in VE_TODAS_NCS:
         return True
     if d.get('criadoPorId') == user['id']:
         return True
+    if status == 'aberta':   # rascunho: só quem abriu (e Administrador, Gestor e Qualidade)
+        return False
     nm = norm(user['nome'])
     if nm == norm(d.get('responsavel')) or any(nm == norm(a.get('responsavel')) for a in d.get('acoes') or []):
         return True
@@ -357,7 +475,7 @@ def can_view(user, d, status, cfg=None):
 
 
 def visiveis(con, user, rows, cfg=None):
-    if user['perfil'] == 'admin':
+    if user['perfil'] in VE_TODAS_NCS:
         return list(rows)
     cfg = cfg or get_cfg(con)
     return [r for r in rows if can_view(user, json.loads(r['data']), r['status'], cfg)]
@@ -375,8 +493,12 @@ def can_edit(user, d, status, cfg=None):
         return True
     if status in ('encerrada', 'cancelada'):
         return False
+    if status == 'qualidade' and user['perfil'] in ENCERRA:   # o Gestor registra a ação da Qualidade e encerra
+        return True
     if d.get('criadoPorId') == user['id']:
         return True
+    if status == 'aberta':   # rascunho: só quem abriu edita
+        return False
     nm = norm(user['nome'])
     return (nm == norm(d.get('responsavel')) or any(nm == norm(a.get('responsavel')) for a in d.get('acoes') or [])
             or do_setor(cfg, d.get('setor'), user['nome']))
@@ -407,12 +529,18 @@ def check_transition(user, d, frm, to, cfg=None):
             m = missing_for(d, FLOW[i])
             if m:
                 raise ApiError(422, f'Pendências na etapa "{STATUS_LABEL[FLOW[i]]}".', pendencias=m, etapa=FLOW[i])
-        if to == 'encerrada' and not pode_encerrar(user, d, cfg):
+        # sair de "Aguardando autorização" = autorizar: gestor da área (admin sempre; sem gestor, a Qualidade)
+        ia = FLOW.index('autorizacao')
+        if fi <= ia < ti and not pode_encerrar(user, d, cfg):
             g = gestor_setor(cfg, d.get('setor'))
-            raise ApiError(403, f'O encerramento desta NC é feito pelo gestor da área ({g}).' if g else
-                           'O encerramento é feito pelo gestor da área. Este setor ainda não tem gestor definido — peça ao administrador para defini-lo em Configurações.')
+            raise ApiError(403, f'A autorização desta NC é feita pelo gestor da área ({g}).' if g else
+                           'A autorização é feita pelo gestor da área. Este setor ainda não tem gestor definido — peça ao administrador para defini-lo em Configurações.')
+        # encerrar (sair de "Qualidade"): somente Qualidade, Gestor ou Administrador
+        if to == 'encerrada' and user['perfil'] not in ENCERRA:
+            raise ApiError(403, 'O encerramento é feito pela Qualidade (perfis Qualidade, Gestor ou Administrador).')
     elif not gestao and not (frm == 'verificacao' and to == 'analise') \
-            and not (frm == 'autorizacao' and pode_encerrar(user, d, cfg)):
+            and not (frm == 'autorizacao' and pode_encerrar(user, d, cfg)) \
+            and not (frm == 'qualidade' and user['perfil'] in ENCERRA):
         raise ApiError(403, 'Somente o gestor da área, a Qualidade ou o Administrador podem retornar etapas.')
 
 
@@ -437,17 +565,17 @@ def hist(d, user, acao, alteracoes=None):
 # Campos rastreados no histórico (caminho, rótulo)
 NC_FIELDS = [
     ('titulo', 'Título'), ('descricao', 'Descrição'), ('dataOcorrencia', 'Data da ocorrência'), ('tipo', 'Tipo'),
-    ('origem', 'Origem'), ('classificacao', 'Classificação'), ('setor', 'Setor de origem da NC'), ('severidade', 'Severidade'),
+    ('origem', 'Origem'), ('classificacao', 'Classificação'), ('setor', 'Setor responsável pela NC'), ('severidade', 'Severidade'),
     ('cliente', 'Cliente / Fornecedor'), ('os', 'Nº Pedido / NF / OC'), ('item', 'Item / equipamento'), ('quantidade', 'Quantidade afetada'),
     ('custo', 'Prejuízo estimado'), ('custoLogHouve', 'Houve custo logístico?'), ('custoLog', 'Custo logístico'), ('detectadoPor', 'Detectado por'), ('responsavel', 'Responsável'), ('prazo', 'Prazo'),
     ('reincidente', 'Reincidente'), ('ncRelacionada', 'NC relacionada'),
-    ('contencao.descricao', 'Contenção'), ('contencao.disposicao', 'Disposição do produto'),
-    ('contencao.responsavel', 'Responsável pela contenção'), ('contencao.data', 'Data da contenção'),
+    ('contencao.descricao', 'Justificativa do responsável'), ('contencao.disposicao', 'Disposição do produto'),
+    ('contencao.responsavel', 'Responsável pela justificativa'), ('contencao.data', 'Data da justificativa'),
     *[(f'causa.porques.{i}', f'{i + 1}º Por quê') for i in range(5)],
     ('causa.causaRaiz', 'Causa raiz'),
     ('eficacia.resultado', 'Eficácia — resultado'), ('eficacia.responsavel', 'Eficácia — verificado por'),
     ('eficacia.data', 'Eficácia — data'), ('eficacia.evidencia', 'Eficácia — evidência'),
-    ('encerramento.comentario', 'Comentário de encerramento'),
+    ('qualidadeAcao', 'Ação da Qualidade'), ('encerramento.comentario', 'Comentário de encerramento'),
 ]
 ACAO_FIELDS = [('descricao', 'O quê'), ('tipo', 'Tipo'), ('porque', 'Por quê'), ('onde', 'Onde'), ('responsavel', 'Quem'),
                ('como', 'Como'), ('prazo', 'Quando'), ('custo', 'Quanto custa'), ('status', 'Status'),
@@ -555,13 +683,14 @@ def r_setup(h, con, user, body, q):
         cur = con.execute('INSERT INTO users(nome,login,senha,perfil,criado_em) VALUES(?,?,?,?,?)',
                           (nome, login, hash_pw(senha), 'admin', now_iso()))
         token = new_session(con, cur.lastrowid)
+    audit(con, h, {'id': cur.lastrowid, 'nome': nome, 'login': login}, 'Usuários', 'Configuração inicial: administrador criado')
     h.set_cookie(token)
     return {'ok': True}
 
 
 @route('POST', '/api/login', public=True)
 def r_login(h, con, user, body, q):
-    ip = h.client_ip()
+    ip = h.client_address[0]
     with LOGIN_LOCK:
         fails, until = LOGIN_FAILS.get(ip, (0, 0))
         if until > time.time():
@@ -574,12 +703,16 @@ def r_login(h, con, user, body, q):
             # 5 tentativas erradas seguidas bloqueiam o IP por 60 s
             LOGIN_FAILS[ip] = (0, time.time() + 60) if fails >= 5 else (fails, 0)
         if r and not r['ativo'] and check_pw(senha, r['senha']):
+            audit(con, h, r, 'Acesso', 'Tentativa de acesso de usuário desativado')
             raise ApiError(403, 'Usuário desativado. Procure o administrador.')
+        audit(con, h, r if r else None, 'Acesso', 'Tentativa de acesso falhou (senha incorreta)' if r else 'Tentativa de acesso com usuário inexistente',
+              login=login)
         raise ApiError(401, 'Usuário ou senha incorretos.')
     with LOGIN_LOCK:
         LOGIN_FAILS.pop(ip, None)
     with tx(con):
         token = new_session(con, r['id'])
+    audit(con, h, r, 'Acesso', 'Entrou no sistema')
     h.set_cookie(token)
     return {'ok': True}
 
@@ -588,6 +721,11 @@ def r_login(h, con, user, body, q):
 def r_logout(h, con, user, body, q):
     tok = h.cookie_token()
     if tok:
+        s = con.execute('SELECT u.id, u.nome, u.login FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?', (tok,)).fetchone()
+        if s:
+            with ONLINE_LOCK:
+                ONLINE.pop(s['id'], None)   # saiu: deixa de aparecer como online
+            audit(con, h, s, 'Acesso', 'Saiu do sistema')
         con.execute('DELETE FROM sessions WHERE token=?', (tok,))
     h.set_cookie('', clear=True)
     return {'ok': True}
@@ -599,7 +737,7 @@ def r_boot(h, con, user, body, q):
     rows = visiveis(con, user, con.execute('SELECT * FROM ncs').fetchall())
     anx = anexos_meta(con, [r['id'] for r in rows]) if rows else {}
     return {'me': user_out(user), 'cfg': get_cfg(con), 'pessoas': pessoas(con), 'rev': rev,
-            'ncs': [nc_out(r, anx) for r in rows], 'versao': VERSAO}
+            'ncs': [nc_out(r, anx) for r in rows], 'versao': VERSAO, 'online': online_list(), 'notif': notif_resumo(con, user)}
 
 
 @route('GET', '/api/ncs')
@@ -612,7 +750,20 @@ def r_poll(h, con, user, body, q):
     ids = [r['id'] for r in vis]
     rows = [r for r in vis if r['rev'] > since]
     anx = anexos_meta(con, [r['id'] for r in rows]) if rows else {}
-    return {'rev': rev, 'changed': [nc_out(r, anx) for r in rows], 'ids': ids, 'cfg': get_cfg(con), 'pessoas': pessoas(con)}
+    return {'rev': rev, 'changed': [nc_out(r, anx) for r in rows], 'ids': ids, 'cfg': get_cfg(con), 'pessoas': pessoas(con),
+            'online': online_list(), 'notif': notif_resumo(con, user)}
+
+
+@route('POST', '/api/notificacoes/lidas')
+def r_notif_lidas(h, con, user, body, q):
+    """Marca notificações do próprio usuário como lidas ({ids:[...]} ou {todas:true})."""
+    if body.get('todas'):
+        con.execute('UPDATE notificacoes SET lida=1 WHERE user_id=? AND lida=0', (user['id'],))
+    else:
+        ids = [int(i) for i in (body.get('ids') or []) if str(i).isdigit()][:200]
+        if ids:
+            con.execute(f"UPDATE notificacoes SET lida=1 WHERE user_id=? AND id IN ({','.join('?' * len(ids))})", [user['id'], *ids])
+    return notif_resumo(con, user)
 
 
 def _num(v):
@@ -634,9 +785,14 @@ def prox_dia_util(iso):
 @route('POST', '/api/ncs')
 def r_create(h, con, user, body, q):
     d = clean(body.get('nc'))
-    check_required(d)
-    check_custo_log(d, nova=True)
-    check_responsavel(con, d)
+    rascunho = bool(body.get('rascunho'))
+    if rascunho:
+        check_rascunho(con, d)
+    else:
+        check_required(d)
+        check_severidade(d)
+        check_custo_log(d, nova=True)
+        check_responsavel(con, d)
     d['criadoPor'], d['criadoPorId'] = user['nome'], user['id']
     d['dataRegistro'], d['createdAt'] = today(), now_iso()
     if not d.get('prazo'):
@@ -647,11 +803,19 @@ def r_create(h, con, user, body, q):
             d['custo'] = cm
     d['encerramento'] = {'data': '', 'por': '', 'comentario': str(((body.get('nc') or {}).get('encerramento') or {}).get('comentario', ''))}
     d['historico'] = []
-    hist(d, user, 'Não conformidade registrada')
+    if rascunho:   # fica com quem abriu até ele clicar em "Enviar para análise"
+        hist(d, user, 'Rascunho salvo')
+    else:          # enviada direto: vai para "Em análise", com o responsável pelo tratamento
+        hist(d, user, 'Não conformidade registrada')
+        hist(d, user, f"Status: {STATUS_LABEL['aberta']} → {STATUS_LABEL['analise']}")
     nc_id = secrets.token_hex(8)
     with tx(con):
         numero = next_numero(con, d['dataOcorrencia'][:4])
-        write_nc(con, nc_id, numero, 'aberta', 1, d, insert=True)
+        write_nc(con, nc_id, numero, 'aberta' if rascunho else 'analise', 1, d, insert=True)
+        if not rascunho:   # avisa o responsável pelo tratamento (pop-up + sino)
+            notificar(con, user, [d.get('responsavel')], f'Nova NC para você tratar: {numero}', d.get('titulo') or '', nc_id, numero)
+        audit(con, h, user, 'NC', f'{"Salvou rascunho" if rascunho else "Registrou e enviou para análise"} {numero}',
+              f"{d.get('titulo') or ''} · responsável: {d.get('responsavel') or '—'} · setor: {d.get('setor') or '—'}", ref=numero)
     return {'nc': nc_out(load_nc(con, nc_id), anexos_meta(con, [nc_id]))}
 
 
@@ -678,11 +842,16 @@ def r_update(h, con, user, body, q, id):
         enc['comentario'] = str((nc_in.get('encerramento') or {}).get('comentario', enc.get('comentario', '')))[:5000]
         d['encerramento'] = enc
         to = nc_in.get('status') or frm
-        check_required(d)
-        check_custo_log(d)
-        check_responsavel(con, d, old)
+        if to == 'aberta':   # continua rascunho: validação mínima
+            check_rascunho(con, d, old)
+        else:
+            check_required(d)
+            check_severidade(d, old)
+            check_custo_log(d, nova=frm == 'aberta')
+            check_responsavel(con, d, old if frm != 'aberta' else None)
         check_transition(user, d, frm, to, cfg)
         changed = content_key(d) != content_key(old)
+        alt = []
         if changed:
             alt = diff_nc(old, d)
             hist(d, user, 'Registro atualizado' if alt else 'Registro atualizado (sem mudança de conteúdo)', alteracoes=alt)
@@ -698,6 +867,16 @@ def r_update(h, con, user, body, q, id):
         if not changed and not nota and to == frm:
             return {'nc': nc_out(row, anexos_meta(con, [id]))}
         write_nc(con, id, row['numero'], to, row['version'] + 1, d)
+        n = row['numero']
+        if to != frm:
+            notificar_etapa(con, user, d, id, n, frm, to, cfg)
+        if to not in ('aberta', 'encerrada', 'cancelada') and norm(d.get('responsavel')) != norm(old.get('responsavel')) \
+                and not (frm == 'aberta' and to == 'analise'):
+            notificar(con, user, [d.get('responsavel')], f'{n} foi atribuída a você', d.get('titulo') or '', id, n)
+        if to != frm:
+            audit(con, h, user, 'NC', f'{n}: {STATUS_LABEL[frm]} → {STATUS_LABEL[to]}', '; '.join(x for x in (nota, resumo_alteracoes(alt)) if x), ref=n)
+        else:
+            audit(con, h, user, 'NC', f'Alterou {n}', '; '.join(x for x in (resumo_alteracoes(alt), nota) if x), ref=n)
     return {'nc': nc_out(load_nc(con, id), anexos_meta(con, [id]))}
 
 
@@ -706,9 +885,10 @@ def r_delete(h, con, user, body, q, id):
     if user['perfil'] != 'admin':
         raise ApiError(403, 'Somente o administrador pode excluir NCs.')
     with tx(con):
-        load_nc(con, id)
+        row = load_nc(con, id)
         con.execute('DELETE FROM ncs WHERE id=?', (id,))
         next_rev(con)
+        audit(con, h, user, 'NC', f"Excluiu definitivamente {row['numero']}", json.loads(row['data']).get('titulo') or '', ref=row['numero'])
     return {'ok': True}
 
 
@@ -731,6 +911,7 @@ def r_anexo_add(h, con, user, body, q, id):
                     (aid, id, nome, tipo, len(raw), raw, now_iso(), user['nome']))
         hist(d, user, f'Anexo adicionado: {nome}')
         write_nc(con, id, row['numero'], row['status'], row['version'], d)
+        audit(con, h, user, 'NC', f"Anexou arquivo em {row['numero']}", nome, ref=row['numero'])
     return {'anexo': next(a for a in anexos_meta(con, [id])[id] if a['id'] == aid)}
 
 
@@ -759,6 +940,7 @@ def r_anexo_del(h, con, user, body, q, id):
         con.execute('DELETE FROM anexos WHERE id=?', (id,))
         hist(d, user, f'Anexo removido: {a["nome"]}')
         write_nc(con, row['id'], row['numero'], row['status'], row['version'], d)
+        audit(con, h, user, 'NC', f"Removeu anexo de {row['numero']}", a['nome'], ref=row['numero'])
     return {'ok': True}
 
 
@@ -767,6 +949,7 @@ def r_cfg(h, con, user, body, q):
     if user['perfil'] != 'admin':
         raise ApiError(403, 'Somente o administrador altera as configurações.')
     cfg = get_cfg(con)
+    antes = json.loads(json.dumps(cfg))
     for k in ('setores', 'tipos', 'origens', 'disposicoes', 'responsaveis'):
         if isinstance(body.get(k), list):
             cfg[k] = [str(x).strip()[:120] for x in body[k] if str(x).strip()]
@@ -811,6 +994,23 @@ def r_cfg(h, con, user, body, q):
     for k in ('setorResp', 'setorGestor', 'setorUsuarios', 'setorCusto'):
         cfg[k] = {s: n for s, n in (cfg.get(k) or {}).items() if s in cfg['setores']}
     con.execute("INSERT INTO kv(k,v) VALUES('cfg',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(cfg, ensure_ascii=False),))
+    nomes = {'setores': 'Setores', 'origens': 'Origens', 'disposicoes': 'Disposições', 'responsaveis': 'Responsáveis externos',
+             'prefixo': 'Prefixo', 'setorGestor': 'Gestor da área', 'setorUsuarios': 'Equipe do setor', 'setorCusto': 'Custo médio ADM/Operação'}
+    mud = []
+    for k, rot in nomes.items():
+        a, b = antes.get(k), cfg.get(k)
+        if a == b:
+            continue
+        if isinstance(a, list) and isinstance(b, list):
+            add, rem = [x for x in b if x not in a], [x for x in a if x not in b]
+            mud.append(f"{rot}: " + ', '.join(([f'+{x}' for x in add] + [f'-{x}' for x in rem]) or ['reordenado']))
+        elif isinstance(a, dict) and isinstance(b, dict):
+            ks = [s for s in set(a) | set(b) if a.get(s) != b.get(s)]
+            mud.append(f"{rot}: " + ', '.join(f"{s}: {a.get(s) or '—'} → {b.get(s) or '—'}" for s in sorted(ks)))
+        else:
+            mud.append(f'{rot}: {a} → {b}')
+    if mud:
+        audit(con, h, user, 'Configurações', 'Alterou configurações', '; '.join(mud))
     return {'cfg': cfg}
 
 
@@ -821,7 +1021,8 @@ def require_admin(user):
 
 @route('GET', '/api/users')
 def r_users(h, con, user, body, q):
-    require_admin(user)
+    if user['perfil'] not in VE_TUDO:   # o gestor consulta a lista (somente leitura)
+        require_admin(user)
     return {'users': [user_out(r, True) for r in con.execute('SELECT * FROM users ORDER BY ativo DESC, nome COLLATE NOCASE')]}
 
 
@@ -843,6 +1044,7 @@ def r_user_new(h, con, user, body, q):
             con.execute('INSERT INTO users(nome,login,email,senha,perfil,trocar_senha,criado_em) VALUES(?,?,?,?,?,1,?)',
                         (nome, login, str(body.get('email', '')).strip(), hash_pw(senha), perfil, now_iso()))
             next_rev(con)
+            audit(con, h, user, 'Usuários', f'Criou o usuário {nome}', f'login: {login} · perfil: {perfil}')
     except sqlite3.IntegrityError:
         raise ApiError(409, f'Já existe um usuário com o login "{login}".')
     return {'ok': True, 'senha': senha}
@@ -874,7 +1076,44 @@ def r_user_upd(h, con, user, body, q, uid):
         if not ativo:
             con.execute('DELETE FROM sessions WHERE user_id=?', (uid,))
         next_rev(con)
+        mud = []
+        if nome != r['nome']: mud.append(f"nome: {r['nome']} → {nome}")
+        if perfil != r['perfil']: mud.append(f"perfil: {r['perfil']} → {perfil}")
+        if ativo != r['ativo']: mud.append('reativado' if ativo else 'desativado (acesso bloqueado)')
+        if body.get('resetSenha'): mud.append('nova senha provisória gerada')
+        email = str(body.get('email', r['email'] or '')).strip()
+        if email != (r['email'] or ''): mud.append(f"e-mail: {r['email'] or '—'} → {email or '—'}")
+        if mud:
+            audit(con, h, user, 'Usuários', f"Alterou o usuário {nome}", '; '.join(mud))
     return out
+
+
+@route('DELETE', '/api/users/(?P<uid>\\d+)')
+def r_user_del(h, con, user, body, q, uid):
+    """Exclui o usuário (ex.: desligamento). As NCs mantêm o nome dele no histórico."""
+    require_admin(user)
+    uid = int(uid)
+    if uid == user['id']:
+        raise ApiError(422, 'Você não pode excluir o seu próprio usuário.')
+    with tx(con):
+        r = con.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
+        if not r:
+            raise ApiError(404, 'Usuário não encontrado.')
+        if r['perfil'] == 'admin' and r['ativo'] and active_admins(con, uid) == 0:
+            raise ApiError(422, 'É preciso manter pelo menos um administrador ativo.')
+        abertas = sum(1 for row in con.execute("SELECT data FROM ncs WHERE status NOT IN ('encerrada','cancelada')")
+                      if norm(json.loads(row['data']).get('responsavel')) == norm(r['nome']))
+        con.execute('DELETE FROM sessions WHERE user_id=?', (uid,))
+        con.execute('DELETE FROM users WHERE id=?', (uid,))
+        # tira o usuário da hierarquia dos setores (gestor / equipe)
+        cfg = get_cfg(con); nm = norm(r['nome'])
+        for k in ('setorGestor', 'setorResp'):
+            cfg[k] = {s: n for s, n in (cfg.get(k) or {}).items() if norm(n) != nm}
+        cfg['setorUsuarios'] = {s: [n for n in ns if norm(n) != nm] for s, ns in (cfg.get('setorUsuarios') or {}).items()}
+        con.execute("INSERT INTO kv(k,v) VALUES('cfg',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(cfg, ensure_ascii=False),))
+        next_rev(con)
+        audit(con, h, user, 'Usuários', f"Excluiu o usuário {r['nome']}", f"login: {r['login']} · perfil: {r['perfil']} · NCs em aberto com ele: {abertas}")
+    return {'ok': True, 'ncsAbertas': abertas}
 
 
 @route('POST', '/api/me/senha')
@@ -885,6 +1124,7 @@ def r_me_pw(h, con, user, body, q):
     if body.get('nova') == body.get('atual'):
         raise ApiError(422, 'A nova senha deve ser diferente da atual.')
     con.execute('UPDATE users SET senha=?,trocar_senha=0 WHERE id=?', (hash_pw(body['nova']), user['id']))
+    audit(con, h, user, 'Acesso', 'Trocou a própria senha')
     return {'ok': True}
 
 
@@ -901,6 +1141,7 @@ def r_backup(h, con, user, body, q):
         d['anexos'] = anx.get(r['id'], [])
         ncs.append(d)
     payload = json.dumps({'app': 'melting-nc', 'versao': 2, 'exportadoEm': now_iso(), 'cfg': get_cfg(con), 'ncs': ncs}, ensure_ascii=False)
+    audit(con, h, user, 'Configurações', 'Baixou backup completo', f'{len(ncs)} NC(s)')
     h.send_bytes(payload.encode(), 'application/json', {
         'Content-Disposition': f'attachment; filename="backup-melting-nc_{today()}.json"'})
     return None
@@ -948,7 +1189,32 @@ def r_import(h, con, user, body, q):
                 con.execute('INSERT OR REPLACE INTO anexos(id,nc_id,nome,tipo,tamanho,conteudo,criado_em,por) VALUES(?,?,?,?,?,?,?,?)',
                             (aid, nc_id, str(a.get('nome') or 'arquivo')[:200], tipo, len(raw), raw, a.get('em') or now_iso(), a.get('por') or user['nome']))
             n_ok += 1
+        audit(con, h, user, 'Configurações', 'Importou backup', f'{n_ok} NC(s) importada(s)')
     return {'ok': True, 'importadas': n_ok}
+
+
+@route('GET', '/api/auditoria')
+def r_auditoria(h, con, user, body, q):
+    """Trilha de auditoria: acessos e alterações. Administrador e Gestor consultam."""
+    if user['perfil'] not in VE_TUDO:
+        raise ApiError(403, 'Somente o administrador ou o gestor consultam os logs de acesso.')
+    g = lambda k: (q.get(k) or [''])[0].strip()
+    where, args = [], []
+    if g('user'):
+        where.append('user_id=?'); args.append(int(g('user')) if g('user').isdigit() else -1)
+    if g('tipo') in AUD_TIPOS:
+        where.append('tipo=?'); args.append(g('tipo'))
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', g('de')):
+        where.append('substr(data,1,10)>=?'); args.append(g('de'))
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', g('ate')):
+        where.append('substr(data,1,10)<=?'); args.append(g('ate'))
+    if g('q'):
+        where.append("(acao LIKE ? OR detalhe LIKE ? OR usuario LIKE ? OR login LIKE ? OR ref LIKE ?)"); args += [f"%{g('q')}%"] * 5
+    lim = min(max(int(g('limit') or 500) if g('limit').isdigit() else 500, 1), 5000)
+    sql = 'SELECT * FROM auditoria' + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY id DESC LIMIT ?'
+    rows = con.execute(sql, args + [lim]).fetchall()
+    total = con.execute('SELECT COUNT(*) FROM auditoria' + (' WHERE ' + ' AND '.join(where) if where else ''), args).fetchone()[0]
+    return {'total': total, 'logs': [{k: r[k] for k in ('id', 'data', 'user_id', 'usuario', 'login', 'tipo', 'acao', 'detalhe', 'ref', 'ip')} for r in rows]}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -967,17 +1233,6 @@ class Handler(BaseHTTPRequestHandler):
     def set_cookie(self, token, clear=False):
         age = 0 if clear else SESSION_DAYS * 86400
         self._cookie = f'nc_sid={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={age}'
-        if BEHIND_PROXY:
-            self._cookie += '; Secure'
-
-    def client_ip(self):
-        ip = self.client_address[0]
-        # Atrás do nginx toda conexão vem de 127.0.0.1; o IP real chega no cabeçalho X-Real-IP.
-        if BEHIND_PROXY and ip in ('127.0.0.1', '::1'):
-            real = (self.headers.get('X-Real-IP') or '').strip()
-            if real:
-                return real
-        return ip
 
     def send_bytes(self, data, ctype, extra=None, status=200):
         self.send_response(status)
@@ -1005,6 +1260,8 @@ class Handler(BaseHTTPRequestHandler):
                         (tok, time.time())).fetchone()
         if r and r['expira'] - time.time() < SESSION_DAYS * 86400 / 2:
             con.execute('UPDATE sessions SET expira=? WHERE token=?', (time.time() + SESSION_DAYS * 86400, tok))
+        if r:
+            marca_online(r)
         return r
 
     def handle_api(self, method, path, query):
@@ -1140,11 +1397,7 @@ def main():
     ap.add_argument('--port', type=int, default=8080)
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--data', default=str(BASE / 'data'), help='pasta do banco de dados')
-    ap.add_argument('--proxy', action='store_true',
-                    help='publicação na internet atrás do nginx com HTTPS (use junto com --host 127.0.0.1)')
     a = ap.parse_args()
-    global BEHIND_PROXY
-    BEHIND_PROXY = a.proxy
     DB_PATH = Path(a.data).resolve() / 'melting-nc.db'
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     oculto = sys.stdout is None or sys.stderr is None  # rodando com pythonw (sem janela)

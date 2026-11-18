@@ -1,6 +1,6 @@
 # Melting · Gestão de Não Conformidades
 
-Sistema multiusuário para registro e tratamento de NCs (contenção → análise de causa → plano de ação 5W2H → verificação de eficácia → encerramento).
+Sistema multiusuário para registro e tratamento de NCs (justificativa → análise de causa → autorização do gestor da área → ação da Qualidade → encerramento).
 
 ## 1. Colocar no ar (uma vez)
 
@@ -28,12 +28,13 @@ Sistema multiusuário para registro e tratamento de NCs (contenção → anális
 | Perfil | Pode |
 |---|---|
 | **Administrador** | **Vê todo o cenário** (todas as NCs). É o **único que cancela** e exclui NCs. Usuários, configurações (setores, tipos, origens, prefixo), backup/importação. |
-| **Qualidade** | Vê só as suas NCs. Avança e retorna etapas e reabre. Encerra apenas se for gestor da área (ou se o setor ainda não tiver gestor). Não cancela. |
+| **Gestor** | Abaixo do administrador: **vê todo o cenário** (todas as NCs, usuários e configurações), mas **só consulta** — não cria/altera/exclui usuários, não muda configurações, não faz backup e não cancela/exclui NCs. |
+| **Qualidade** | **Vê todas as NCs** e o Painel completo. Avança e retorna etapas e reabre. Registra a Ação da Qualidade e **encerra** as NCs. Não cancela. |
 | **Colaborador** | Vê só as suas NCs. Registra NCs e trata as que registrou, as que tem como responsável e as do setor em que é gestor. Não cancela e não reabre. |
 
 ### Quem vê cada NC
 
-O **administrador** vê todas. Os demais usuários veem apenas **as suas pendências** — as NCs em que:
+**Administrador, Gestor e Qualidade** veem todas. O **Colaborador** vê apenas **as suas pendências** — e o Painel dele mostra só os dados dessas NCs — ou seja, as NCs em que:
 
 - é o **responsável** pelo tratamento (ou por alguma ação);
 - **registrou** a NC;
@@ -50,7 +51,8 @@ No topo do **Kanban de gestão** há filtros por **responsável, setor, cliente,
 
 Em **Configurações → Setores / áreas** cada setor tem um **gestor da área** e uma **equipe** (usuários).
 
-- O **encerramento** da NC é feito pelo **gestor da área** do setor da NC (o administrador também pode).
+- A **autorização** da NC é feita pelo **gestor da área** do setor da NC (o administrador também pode); depois dela a NC vai para a etapa **Qualidade**.
+- O **encerramento** é feito pela **Qualidade** — perfis **Qualidade, Gestor ou Administrador** — depois de registrar a **Ação da Qualidade**.
 - O gestor é sugerido como responsável ao escolher o setor e vê as NCs da área em *Minhas pendências*.
 - A equipe pode tratar as NCs do seu setor quando for o responsável por elas.
 - Ao abrir a NC é obrigatório responder **"Houve custo logístico?"**. Se **Sim**, o **valor do custo logístico** passa a ser obrigatório; ele é somado ao prejuízo estimado no **prejuízo total** da NC (Painel, impressão e Excel).
@@ -58,7 +60,15 @@ Em **Configurações → Setores / áreas** cada setor tem um **gestor da área*
 
 ### Fluxo
 
-Aberta → Em análise → Encerrada. O plano de ação 5W2H e a verificação de eficácia estão desativados por enquanto (para reativar: `PLANO_ACAO = True` em `server.py` e `PLANO_ACAO = true` em `public/app.js`).
+Rascunho (opcional, só quem abriu vê) → Em análise → Aguardando autorização (gestor da área) → **Qualidade** (ação da Qualidade) → Encerrada.
+
+### Outras telas
+
+- **Históricos** (menu lateral): NCs encerradas (a partir do dia seguinte ao encerramento) e canceladas, com filtros e exportação para Excel.
+- **Notificações**: o sino no canto superior direito mostra as mensagens lidas e não lidas; quando uma NC chega para você, aparece um aviso na tela.
+- **Usuários online**: ao lado do sino; passe o mouse para ver o nome completo.
+- **Usuários → Logs de acesso** (Administrador e Gestor): entradas, saídas, tentativas com erro e todas as alterações feitas no sistema, com exportação para Excel.
+- **Kanban**: a seta no topo de cada coluna ordena os cartões pela data da NC (crescente/decrescente). O plano de ação 5W2H e a verificação de eficácia estão desativados por enquanto (para reativar: `PLANO_ACAO = True` em `server.py` e `PLANO_ACAO = true` em `public/app.js`).
 
 As regras são verificadas no servidor, e o **histórico** de cada NC (quem fez o quê e quando) é gravado pelo servidor.
 

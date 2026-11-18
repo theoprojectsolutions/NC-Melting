@@ -14,7 +14,7 @@ import postgres from 'npm:postgres@3.4.5';
 import { Buffer } from 'node:buffer';
 import { enviarSenha } from './email.ts';
 
-const VERSAO = '2.0-supabase';
+const VERSAO = '2.1-supabase';
 const SESSION_DAYS = 14;
 const MAX_BODY = 25 * 1024 * 1024;
 const MAX_FILE = 8 * 1024 * 1024;
@@ -26,17 +26,22 @@ const LOCK_ID = 7240001; // trava global de escrita (equivale ao BEGIN IMMEDIATE
 // Para reativar: true aqui e PLANO_ACAO = true no public/app.js.
 const PLANO_ACAO = false;
 const FLOW = PLANO_ACAO
-  ? ['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'encerrada']
-  : ['aberta', 'analise', 'autorizacao', 'encerrada'];
+  ? ['aberta', 'analise', 'acao', 'verificacao', 'autorizacao', 'qualidade', 'encerrada']
+  : ['aberta', 'analise', 'autorizacao', 'qualidade', 'encerrada'];
 const STATUS_LABEL: Record<string, string> = {
-  aberta: 'Aberta', analise: 'Em análise', acao: 'Ação em andamento', verificacao: 'Verificação de eficácia',
-  autorizacao: 'Aguardando autorização', encerrada: 'Encerrada', cancelada: 'Cancelada',
+  aberta: 'Rascunho', analise: 'Em análise', acao: 'Ação em andamento', verificacao: 'Verificação de eficácia',
+  autorizacao: 'Aguardando autorização', qualidade: 'Qualidade', encerrada: 'Encerrada', cancelada: 'Cancelada',
 };
-const PERFIS = ['admin', 'qualidade', 'colaborador'];
+const ENCERRA = ['admin', 'gestor', 'qualidade'];   // perfis que encerram a NC (depois da etapa "Qualidade")
+const PERFIS = ['admin', 'gestor', 'qualidade', 'colaborador'];
+const VE_TUDO = ['admin', 'gestor'];                // gestor: vê todo o cenário, sem poderes de administração
+const VE_TODAS_NCS = ['admin', 'gestor', 'qualidade'];
 const GESTAO = ['admin', 'qualidade'];
+const AUD_TIPOS = ['Acesso', 'NC', 'Usuários', 'Configurações'];
+const ONLINE_JANELA = 90; // segundos sem atividade para sair da lista de online
 const REQUIRED: [string, string][] = [
-  ['titulo', 'Título'], ['descricao', 'Descrição'], ['dataOcorrencia', 'Data da ocorrência'], ['tipo', 'Tipo'],
-  ['setor', 'Setor de origem da NC'], ['responsavel', 'Responsável'], ['severidade', 'Severidade'],
+  ['titulo', 'Título'], ['descricao', 'Descrição'], ['dataOcorrencia', 'Data da ocorrência'],
+  ['setor', 'Setor responsável pela NC'], ['responsavel', 'Responsável'], ['severidade', 'Severidade'],
   ['cliente', 'Cliente / Fornecedor'], ['origem', 'Origem / como foi detectada'],
 ];
 const MANAGED = new Set(['id', 'numero', 'status', 'version', 'updatedAt', 'anexos', 'historico', 'criadoPor', 'criadoPorId',
@@ -223,6 +228,8 @@ function stable(v: Any): Any {
   return v;
 }
 
+const sameVal = (a: Any, b: Any) => JSON.stringify(stable(a ?? null)) === JSON.stringify(stable(b ?? null));
+
 function contentKey(d: Any) {
   const x: Any = {};
   for (const [k, v] of Object.entries(d)) if (!MANAGED.has(k)) x[k] = v;
@@ -265,13 +272,34 @@ async function checkResponsavel(db: Db, d: Any, old?: Any) {
   }
 }
 
+const SEV_VALIDAS = ['baixa', 'media', 'alta']; // "critica" saiu de uso; NCs antigas com ela continuam como estão
+
+function checkSeveridade(d: Any, old?: Any) {
+  const s = d.severidade || '';
+  if (s && !SEV_VALIDAS.includes(s) && !(old !== undefined && old !== null && old.severidade === s)) {
+    throw new ApiError(422, 'Severidade inválida: use Baixa, Média ou Alta.', { campos: ['severidade'] });
+  }
+}
+
+async function checkRascunho(db: Db, d: Any, old?: Any) {
+  // Rascunho (status "aberta"): só o título é obrigatório; o resto é cobrado ao enviar para análise.
+  if (!str(d.titulo || '').trim()) throw new ApiError(422, 'Para salvar o rascunho, informe ao menos o título.', { campos: ['titulo'] });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str(d.dataOcorrencia || ''))) d.dataOcorrencia = today();
+  checkSeveridade(d, old);
+  if (str(d.responsavel || '').trim()) await checkResponsavel(db, d, old);
+  if ((d.custoLogHouve || '') === 'sim' && !(num(d.custoLog) > 0)) throw new ApiError(422, 'Informe o valor do custo logístico.', { campos: ['custoLog'] });
+}
+
 function missingFor(d: Any, status: string) {
   const m: string[] = [];
   const acoes: Any[] = Array.isArray(d.acoes) ? d.acoes : [];
   if (status === 'aberta') {
-    if (!str((d.contencao || {}).descricao || '').trim()) m.push('Descreva a ação imediata / contenção (seção 2).');
+    /* quem abre só registra; a justificativa é do responsável, na etapa "Em análise" */
+  } else if (status === 'qualidade') {
+    if (!str(d.qualidadeAcao || '').trim()) m.push('Descreva a ação da Qualidade para resolver a não conformidade (seção Encerramento).');
   } else if (status === 'analise') {
-    if (!str((d.causa || {}).causaRaiz || '').trim()) m.push('Informe a causa raiz (seção 3).');
+    if (!str((d.contencao || {}).descricao || '').trim()) m.push('Preencha a justificativa do responsável (seção 3).');
+    if (!str((d.causa || {}).causaRaiz || '').trim()) m.push('Informe a causa raiz (seção 4).');
     if (!PLANO_ACAO) { /* plano de ação desativado */ }
     else if (!acoes.length) m.push('Cadastre ao menos uma ação no plano de ação (seção 4).');
     else if (acoes.some(a => !str(a.descricao || '').trim() || !str(a.responsavel || '').trim() || !a.prazo)) {
@@ -309,8 +337,9 @@ const acoesOf = (d: Any): Any[] => (Array.isArray(d.acoes) ? d.acoes : []).filte
 
 function canView(user: Any, d: Any, status: string, cfg: Any) {
   // Visibilidade: o administrador vê todo o cenário; os demais veem só as NCs que são deles.
-  if (user.perfil === 'admin') return true;
+  if (VE_TODAS_NCS.includes(user.perfil)) return true;
   if (d.criadoPorId === user.id) return true;
+  if (status === 'aberta') return false; // rascunho: só quem abriu (e Administrador, Gestor e Qualidade)
   const nm = norm(user.nome);
   if (nm === norm(d.responsavel) || acoesOf(d).some(a => nm === norm(a.responsavel))) return true;
   const g = gestorSetor(cfg, d.setor);
@@ -319,7 +348,7 @@ function canView(user: Any, d: Any, status: string, cfg: Any) {
 }
 
 async function visiveis(db: Db, user: Any, rows: Any[], cfg?: Any) {
-  if (user.perfil === 'admin') return rows;
+  if (VE_TODAS_NCS.includes(user.perfil)) return rows;
   cfg = cfg || await getCfg(db);
   return rows.filter(r => canView(user, r.data, r.status, cfg));
 }
@@ -335,7 +364,9 @@ async function loadVisivel(db: Db, user: Any, ncId: string, cfg?: Any) {
 function canEdit(user: Any, d: Any, status: string, cfg: Any) {
   if (GESTAO.includes(user.perfil)) return true;
   if (status === 'encerrada' || status === 'cancelada') return false;
+  if (status === 'qualidade' && ENCERRA.includes(user.perfil)) return true; // o Gestor registra a ação da Qualidade e encerra
   if (d.criadoPorId === user.id) return true;
+  if (status === 'aberta') return false; // rascunho: só quem abriu edita
   const nm = norm(user.nome);
   return nm === norm(d.responsavel) || acoesOf(d).some(a => nm === norm(a.responsavel)) || doSetor(cfg, d.setor, user.nome);
 }
@@ -362,12 +393,19 @@ function checkTransition(user: Any, d: Any, frm: string, to: string, cfg: Any) {
       const m = missingFor(d, FLOW[i]);
       if (m.length) throw new ApiError(422, `Pendências na etapa "${STATUS_LABEL[FLOW[i]]}".`, { pendencias: m, etapa: FLOW[i] });
     }
-    if (to === 'encerrada' && !podeEncerrar(user, d, cfg)) {
+    // sair de "Aguardando autorização" = autorizar: gestor da área (admin sempre; sem gestor, a Qualidade)
+    const ia = FLOW.indexOf('autorizacao');
+    if (fi <= ia && ia < ti && !podeEncerrar(user, d, cfg)) {
       const g = gestorSetor(cfg, d.setor);
-      throw new ApiError(403, g ? `O encerramento desta NC é feito pelo gestor da área (${g}).`
-        : 'O encerramento é feito pelo gestor da área. Este setor ainda não tem gestor definido — peça ao administrador para defini-lo em Configurações.');
+      throw new ApiError(403, g ? `A autorização desta NC é feita pelo gestor da área (${g}).`
+        : 'A autorização é feita pelo gestor da área. Este setor ainda não tem gestor definido — peça ao administrador para defini-lo em Configurações.');
     }
-  } else if (!gestao && !(frm === 'verificacao' && to === 'analise') && !(frm === 'autorizacao' && podeEncerrar(user, d, cfg))) {
+    // encerrar (sair de "Qualidade"): somente Qualidade, Gestor ou Administrador
+    if (to === 'encerrada' && !ENCERRA.includes(user.perfil)) {
+      throw new ApiError(403, 'O encerramento é feito pela Qualidade (perfis Qualidade, Gestor ou Administrador).');
+    }
+  } else if (!gestao && !(frm === 'verificacao' && to === 'analise') && !(frm === 'autorizacao' && podeEncerrar(user, d, cfg))
+    && !(frm === 'qualidade' && ENCERRA.includes(user.perfil))) {
     throw new ApiError(403, 'Somente o gestor da área, a Qualidade ou o Administrador podem retornar etapas.');
   }
 }
@@ -393,17 +431,17 @@ function hist(d: Any, user: Any, acao: string, alteracoes?: Any[]) {
 // Campos rastreados no histórico (caminho, rótulo)
 const NC_FIELDS: [string, string][] = [
   ['titulo', 'Título'], ['descricao', 'Descrição'], ['dataOcorrencia', 'Data da ocorrência'], ['tipo', 'Tipo'],
-  ['origem', 'Origem'], ['classificacao', 'Classificação'], ['setor', 'Setor de origem da NC'], ['severidade', 'Severidade'],
+  ['origem', 'Origem'], ['classificacao', 'Classificação'], ['setor', 'Setor responsável pela NC'], ['severidade', 'Severidade'],
   ['cliente', 'Cliente / Fornecedor'], ['os', 'Nº Pedido / NF / OC'], ['item', 'Item / equipamento'], ['quantidade', 'Quantidade afetada'],
   ['custo', 'Prejuízo estimado'], ['custoLogHouve', 'Houve custo logístico?'], ['custoLog', 'Custo logístico'], ['detectadoPor', 'Detectado por'],
   ['responsavel', 'Responsável'], ['prazo', 'Prazo'], ['reincidente', 'Reincidente'], ['ncRelacionada', 'NC relacionada'],
-  ['contencao.descricao', 'Contenção'], ['contencao.disposicao', 'Disposição do produto'],
-  ['contencao.responsavel', 'Responsável pela contenção'], ['contencao.data', 'Data da contenção'],
+  ['contencao.descricao', 'Justificativa do responsável'], ['contencao.disposicao', 'Disposição do produto'],
+  ['contencao.responsavel', 'Responsável pela justificativa'], ['contencao.data', 'Data da justificativa'],
   ...[0, 1, 2, 3, 4].map(i => [`causa.porques.${i}`, `${i + 1}º Por quê`] as [string, string]),
   ['causa.causaRaiz', 'Causa raiz'],
   ['eficacia.resultado', 'Eficácia — resultado'], ['eficacia.responsavel', 'Eficácia — verificado por'],
   ['eficacia.data', 'Eficácia — data'], ['eficacia.evidencia', 'Eficácia — evidência'],
-  ['encerramento.comentario', 'Comentário de encerramento'],
+  ['qualidadeAcao', 'Ação da Qualidade'], ['encerramento.comentario', 'Comentário de encerramento'],
 ];
 const ACAO_FIELDS: [string, string][] = [['descricao', 'O quê'], ['tipo', 'Tipo'], ['porque', 'Por quê'], ['onde', 'Onde'],
   ['responsavel', 'Quem'], ['como', 'Como'], ['prazo', 'Quando'], ['custo', 'Quanto custa'], ['status', 'Status'],
@@ -498,6 +536,88 @@ function proxDiaUtil(iso: string) {
 
 const cleanId = (s: Any) => sliceCp(str(s).replace(/[^\p{L}\p{N}_-]/gu, ''), 0, 40);
 
+// ---------------------------------------------------------------- auditoria (logs de acesso e alterações)
+async function audit(db: Db, ip: string, user: Any, tipo: string, acao: string, detalhe: Any = '', ref: Any = '', login = '') {
+  // Registra um evento na trilha de auditoria (não quebra a operação se falhar).
+  try {
+    await db`insert into nc.auditoria(data,user_id,usuario,login,tipo,acao,detalhe,ref,ip) values(
+      ${nowIso()}, ${user ? user.id : null}, ${user ? user.nome : ''}, ${(user ? user.login : login) || ''},
+      ${tipo}, ${sliceCp(str(acao), 0, 300)}, ${sliceCp(str(detalhe || ''), 0, 4000)}, ${sliceCp(str(ref || ''), 0, 60)}, ${ip || ''})`;
+  } catch (e) {
+    console.error('audit', e);
+  }
+}
+
+function resumoAlteracoes(alt: Any[], limite = 12) {
+  if (!alt || !alt.length) return '';
+  const itens = alt.slice(0, limite).map(a => `${a.campo}: ${a.de || 'vazio'} → ${a.para || 'vazio'}`);
+  return itens.join('; ') + (alt.length > limite ? ` (+${alt.length - limite} campo(s))` : '');
+}
+
+// ---------------------------------------------------------------- notificações
+async function notificar(db: Db, actor: Any, nomes: Any[], titulo: string, texto: Any = '', ncId = '', ref = '') {
+  // Cria notificação para os usuários (por nome, só ativos), exceto para quem fez a ação.
+  const alvo = new Set(nomes.filter(n => str(n || '').trim()).map(n => norm(n)));
+  if (!alvo.size) return;
+  for (const r of await db`select id, nome from nc.users where ativo order by id`) {
+    if (alvo.has(norm(r.nome)) && (!actor || r.id !== actor.id)) {
+      await db`insert into nc.notificacoes(user_id,data,titulo,texto,nc_id,ref,de)
+        values(${r.id}, ${nowIso()}, ${sliceCp(titulo, 0, 200)}, ${sliceCp(str(texto || ''), 0, 500)}, ${ncId}, ${ref}, ${actor ? actor.nome : ''})`;
+    }
+  }
+}
+
+async function nomesPerfil(db: Db, perfil: string): Promise<string[]> {
+  return (await db`select nome from nc.users where ativo and perfil=${perfil} order by id`).map((r: Any) => r.nome);
+}
+
+async function notificarEtapa(db: Db, actor: Any, d: Any, ncId: string, numero: string, frm: string, to: string, cfg: Any) {
+  // Avisa quem precisa agir quando a NC muda de etapa.
+  const tit = d.titulo || '';
+  if (to === 'analise' && frm === 'aberta') {
+    await notificar(db, actor, [d.responsavel], `Nova NC para você tratar: ${numero}`, tit, ncId, numero);
+  } else if (to === 'analise' && (frm === 'autorizacao' || frm === 'qualidade')) {
+    await notificar(db, actor, [d.responsavel], `${numero} foi devolvida para análise`, tit, ncId, numero);
+  } else if (to === 'autorizacao') {
+    const g = gestorSetor(cfg, d.setor);
+    await notificar(db, actor, g ? [g] : await nomesPerfil(db, 'qualidade'), `${numero} aguarda a sua autorização`, tit, ncId, numero);
+  } else if (to === 'qualidade') {
+    await notificar(db, actor, await nomesPerfil(db, 'qualidade'), `${numero} autorizada: ação da Qualidade`, tit, ncId, numero);
+  } else if (to === 'encerrada') {
+    await notificar(db, actor, [d.responsavel, d.criadoPor], `${numero} foi encerrada`, tit, ncId, numero);
+  }
+}
+
+async function notifResumo(db: Db, user: Any) {
+  const rows = await db`select * from nc.notificacoes where user_id=${user.id} order by id desc limit 40`;
+  const [c] = await db`select count(*)::int n from nc.notificacoes where user_id=${user.id} and not lida`;
+  return {
+    naoLidas: c.n,
+    lista: rows.map((r: Any) => ({ id: r.id, data: r.data, titulo: r.titulo, texto: r.texto, nc_id: r.nc_id, ref: r.ref, de: r.de, lida: !!r.lida })),
+  };
+}
+
+// ---------------------------------------------------------------- usuários online (tabela nc.online; o navegador consulta a cada 15 s)
+async function marcaOnline(u: Any) {
+  await sql`insert into nc.online(user_id,visto,nome,perfil) values(${u.id}, ${Date.now() / 1000}, ${u.nome}, ${u.perfil})
+    on conflict(user_id) do update set visto=excluded.visto, nome=excluded.nome, perfil=excluded.perfil`;
+}
+
+async function onlineList(db: Db = sql) {
+  const lim = Date.now() / 1000 - ONLINE_JANELA;
+  await db`delete from nc.online where visto < ${lim}`;
+  const rows = await db`select user_id, nome, perfil from nc.online`;
+  return rows.map((r: Any) => ({ id: r.user_id, nome: r.nome, perfil: r.perfil }))
+    .sort((a: Any, b: Any) => (norm(a.nome) < norm(b.nome) ? -1 : norm(a.nome) > norm(b.nome) ? 1 : 0));
+}
+
+/** Formata como o Python (repr) para listas dentro do resumo de configurações. */
+function pyVal(v: Any): string {
+  if (Array.isArray(v)) return '[' + v.map(x => typeof x === 'string' ? `'${x}'` : pyVal(x)).join(', ') + ']';
+  if (v === null || v === undefined) return 'None';
+  return String(v);
+}
+
 // ---------------------------------------------------------------- rotas
 type Ctx = { req: Request; user: Any; body: Any; q: URLSearchParams; params: Record<string, string>; token: string | null; ip: string };
 type Handler = (c: Ctx) => Promise<Any>;
@@ -513,7 +633,7 @@ route('GET', '/api/status', async () => {
   return { setup: r.n === 0, versao: VERSAO };
 }, true);
 
-route('POST', '/api/setup', async ({ body }) => {
+route('POST', '/api/setup', async ({ body, ip }) => {
   const nome = str(body.nome ?? '').trim(), login = str(body.login ?? '').trim(), senha = body.senha ?? '';
   if (!nome || !login) throw new ApiError(422, 'Informe nome e usuário.');
   validatePw(senha);
@@ -522,6 +642,7 @@ route('POST', '/api/setup', async ({ body }) => {
     const [c] = await t`select count(*)::int n from nc.users`;
     if (c.n) throw new ApiError(409, 'O sistema já foi configurado.');
     const [u] = await t`insert into nc.users(nome,login,senha,perfil,criado_em) values(${nome},${login},${hash},'admin',${nowIso()}) returning id`;
+    await audit(t, ip, { id: u.id, nome, login }, 'Usuários', 'Configuração inicial: administrador criado');
     return await newSession(t, u.id);
   });
   return { ok: true, token };
@@ -542,16 +663,28 @@ route('POST', '/api/login', async ({ body, ip }) => {
     const [f, a] = fails >= 5 ? [0, now + 60] : [fails, 0];
     await sql`insert into nc.login_fails(ip,fails,ate) values(${ip},${f},${a})
       on conflict(ip) do update set fails=excluded.fails, ate=excluded.ate`;
-    if (r && !r.ativo && ok) throw new ApiError(403, 'Usuário desativado. Procure o administrador.');
+    if (r && !r.ativo && ok) {
+      await audit(sql, ip, r, 'Acesso', 'Tentativa de acesso de usuário desativado');
+      throw new ApiError(403, 'Usuário desativado. Procure o administrador.');
+    }
+    await audit(sql, ip, r || null, 'Acesso', r ? 'Tentativa de acesso falhou (senha incorreta)' : 'Tentativa de acesso com usuário inexistente', '', '', login);
     throw new ApiError(401, 'Usuário ou senha incorretos.');
   }
   await sql`delete from nc.login_fails where ip=${ip}`;
   const token = await tx(t => newSession(t, r.id));
+  await audit(sql, ip, r, 'Acesso', 'Entrou no sistema');
   return { ok: true, token };
 }, true);
 
-route('POST', '/api/logout', async ({ token }) => {
-  if (token) await sql`delete from nc.sessions where token=${token}`;
+route('POST', '/api/logout', async ({ token, ip }) => {
+  if (token) {
+    const [u] = await sql`select u.id, u.nome, u.login from nc.sessions s join nc.users u on u.id=s.user_id where s.token=${token}`;
+    if (u) {
+      await sql`delete from nc.online where user_id=${u.id}`; // saiu: deixa de aparecer como online
+      await audit(sql, ip, u, 'Acesso', 'Saiu do sistema');
+    }
+    await sql`delete from nc.sessions where token=${token}`;
+  }
   return { ok: true };
 }, true);
 
@@ -559,7 +692,8 @@ route('GET', '/api/bootstrap', async ({ user }) => {
   const rev = await curRev(sql);
   const rows = await visiveis(sql, user, await sql`select * from nc.ncs`);
   const anx = rows.length ? await anexosMeta(sql, rows.map((r: Any) => r.id)) : {};
-  return { me: userOut(user), cfg: await getCfg(sql), pessoas: await pessoas(sql), rev, ncs: rows.map((r: Any) => ncOut(r, anx)), versao: VERSAO };
+  return { me: userOut(user), cfg: await getCfg(sql), pessoas: await pessoas(sql), rev, ncs: rows.map((r: Any) => ncOut(r, anx)), versao: VERSAO,
+    online: await onlineList(), notif: await notifResumo(sql, user) };
 });
 
 route('GET', '/api/ncs', async ({ user, q }) => {
@@ -570,14 +704,32 @@ route('GET', '/api/ncs', async ({ user, q }) => {
   const ids = vis.map((r: Any) => r.id);
   const rows = vis.filter((r: Any) => r.rev > since);
   const anx = rows.length ? await anexosMeta(sql, rows.map((r: Any) => r.id)) : {};
-  return { rev, changed: rows.map((r: Any) => ncOut(r, anx)), ids, cfg, pessoas: await pessoas(sql) };
+  return { rev, changed: rows.map((r: Any) => ncOut(r, anx)), ids, cfg, pessoas: await pessoas(sql),
+    online: await onlineList(), notif: await notifResumo(sql, user) };
 });
 
-route('POST', '/api/ncs', async ({ user, body }) => {
+route('POST', '/api/notificacoes/lidas', async ({ user, body }) => {
+  // Marca notificações do próprio usuário como lidas ({ids:[...]} ou {todas:true}).
+  if (body.todas) {
+    await sql`update nc.notificacoes set lida=true where user_id=${user.id} and not lida`;
+  } else {
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter((i: Any) => /^\d+$/.test(String(i))).map((i: Any) => parseInt(String(i), 10)).slice(0, 200);
+    if (ids.length) await sql`update nc.notificacoes set lida=true where user_id=${user.id} and id in ${sql(ids)}`;
+  }
+  return await notifResumo(sql, user);
+});
+
+route('POST', '/api/ncs', async ({ user, body, ip }) => {
   const d = clean(body.nc);
-  checkRequired(d);
-  checkCustoLog(d, true);
-  await checkResponsavel(sql, d);
+  const rascunho = !!body.rascunho;
+  if (rascunho) {
+    await checkRascunho(sql, d);
+  } else {
+    checkRequired(d);
+    checkSeveridade(d);
+    checkCustoLog(d, true);
+    await checkResponsavel(sql, d);
+  }
   d.criadoPor = user.nome;
   d.criadoPorId = user.id;
   d.dataRegistro = today();
@@ -589,16 +741,24 @@ route('POST', '/api/ncs', async ({ user, body }) => {
   }
   d.encerramento = { data: '', por: '', comentario: str(((body.nc || {}).encerramento || {}).comentario ?? '') };
   d.historico = [];
-  hist(d, user, 'Não conformidade registrada');
+  if (rascunho) {   // fica com quem abriu até ele clicar em "Enviar para análise"
+    hist(d, user, 'Rascunho salvo');
+  } else {          // enviada direto: vai para "Em análise", com o responsável pelo tratamento
+    hist(d, user, 'Não conformidade registrada');
+    hist(d, user, `Status: ${STATUS_LABEL.aberta} → ${STATUS_LABEL.analise}`);
+  }
   const ncId = tokenHex(8);
   await tx(async t => {
     const numero = await nextNumero(t, String(d.dataOcorrencia).slice(0, 4));
-    await writeNc(t, ncId, numero, 'aberta', 1, d, true);
+    await writeNc(t, ncId, numero, rascunho ? 'aberta' : 'analise', 1, d, true);
+    if (!rascunho) await notificar(t, user, [d.responsavel], `Nova NC para você tratar: ${numero}`, d.titulo || '', ncId, numero);
+    await audit(t, ip, user, 'NC', `${rascunho ? 'Salvou rascunho' : 'Registrou e enviou para análise'} ${numero}`,
+      `${d.titulo || ''} · responsável: ${d.responsavel || '—'} · setor: ${d.setor || '—'}`, numero);
   });
   return { nc: ncOut(await loadNc(sql, ncId), await anexosMeta(sql, [ncId])) };
 });
 
-route('PUT', `/api/ncs/${ID}`, async ({ user, body, params: { id } }) => {
+route('PUT', `/api/ncs/${ID}`, async ({ user, body, params: { id }, ip }) => {
   const ncIn = isObj(body.nc) ? body.nc : {};
   return await tx(async t => {
     const cfg = await getCfg(t);
@@ -621,13 +781,19 @@ route('PUT', `/api/ncs/${ID}`, async ({ user, body, params: { id } }) => {
     enc.comentario = sliceCp(str('comentario' in encIn ? encIn.comentario : (enc.comentario ?? '')), 0, 5000);
     d.encerramento = enc;
     const to = ncIn.status || frm;
-    checkRequired(d);
-    checkCustoLog(d);
-    await checkResponsavel(t, d, old);
+    if (to === 'aberta') {   // continua rascunho: validação mínima
+      await checkRascunho(t, d, old);
+    } else {
+      checkRequired(d);
+      checkSeveridade(d, old);
+      checkCustoLog(d, frm === 'aberta');
+      await checkResponsavel(t, d, frm !== 'aberta' ? old : undefined);
+    }
     checkTransition(user, d, frm, to, cfg);
     const changed = contentKey(d) !== contentKey(old);
+    let alt: Any[] = [];
     if (changed) {
-      const alt = diffNc(old, d);
+      alt = diffNc(old, d);
       hist(d, user, alt.length ? 'Registro atualizado' : 'Registro atualizado (sem mudança de conteúdo)', alt);
     }
     const nota = str(body.nota || '').trim();
@@ -639,21 +805,33 @@ route('PUT', `/api/ncs/${ID}`, async ({ user, body, params: { id } }) => {
     }
     if (!changed && !nota && to === frm) return { nc: ncOut(row, await anexosMeta(t, [id])) };
     await writeNc(t, id, row.numero, to, row.version + 1, d);
+    const n = row.numero;
+    if (to !== frm) await notificarEtapa(t, user, d, id, n, frm, to, cfg);
+    if (!['aberta', 'encerrada', 'cancelada'].includes(to) && norm(d.responsavel) !== norm(old.responsavel)
+      && !(frm === 'aberta' && to === 'analise')) {
+      await notificar(t, user, [d.responsavel], `${n} foi atribuída a você`, d.titulo || '', id, n);
+    }
+    if (to !== frm) {
+      await audit(t, ip, user, 'NC', `${n}: ${STATUS_LABEL[frm]} → ${STATUS_LABEL[to]}`, [nota, resumoAlteracoes(alt)].filter(x => x).join('; '), n);
+    } else {
+      await audit(t, ip, user, 'NC', `Alterou ${n}`, [resumoAlteracoes(alt), nota].filter(x => x).join('; '), n);
+    }
     return { nc: ncOut(await loadNc(t, id), await anexosMeta(t, [id])) };
   });
 });
 
-route('DELETE', `/api/ncs/${ID}`, async ({ user, params: { id } }) => {
+route('DELETE', `/api/ncs/${ID}`, async ({ user, params: { id }, ip }) => {
   if (user.perfil !== 'admin') throw new ApiError(403, 'Somente o administrador pode excluir NCs.');
   await tx(async t => {
-    await loadNc(t, id);
+    const row = await loadNc(t, id);
     await t`delete from nc.ncs where id=${id}`;
     await nextRev(t);
+    await audit(t, ip, user, 'NC', `Excluiu definitivamente ${row.numero}`, row.data.titulo || '', row.numero);
   });
   return { ok: true };
 });
 
-route('POST', `/api/ncs/${ID}/anexos`, async ({ user, body, params: { id } }) => {
+route('POST', `/api/ncs/${ID}/anexos`, async ({ user, body, params: { id }, ip }) => {
   let [tipo, raw] = decodeDataUrl(body.data);
   tipo = body.tipo || tipo;
   if (!FILE_TYPES.has(tipo)) throw new ApiError(415, 'Formato não suportado. Use imagens ou PDF.');
@@ -668,6 +846,7 @@ route('POST', `/api/ncs/${ID}/anexos`, async ({ user, body, params: { id } }) =>
       values(${aid},${id},${nome},${tipo},${raw.length},${Buffer.from(raw)},${nowIso()},${user.nome})`;
     hist(d, user, `Anexo adicionado: ${nome}`);
     await writeNc(t, id, row.numero, row.status, row.version, d);
+    await audit(t, ip, user, 'NC', `Anexou arquivo em ${row.numero}`, nome, row.numero);
   });
   return { anexo: (await anexosMeta(sql, [id]))[id].find(a => a.id === aid) };
 });
@@ -682,7 +861,7 @@ route('GET', `/api/anexos/${ID}`, async ({ user, params: { id } }) => {
   });
 });
 
-route('DELETE', `/api/anexos/${ID}`, async ({ user, params: { id } }) => {
+route('DELETE', `/api/anexos/${ID}`, async ({ user, params: { id }, ip }) => {
   await tx(async t => {
     const [a] = await t`select nc_id,nome from nc.anexos where id=${id}`;
     if (!a) throw new ApiError(404, 'Anexo não encontrado.');
@@ -692,13 +871,15 @@ route('DELETE', `/api/anexos/${ID}`, async ({ user, params: { id } }) => {
     await t`delete from nc.anexos where id=${id}`;
     hist(d, user, `Anexo removido: ${a.nome}`);
     await writeNc(t, row.id, row.numero, row.status, row.version, d);
+    await audit(t, ip, user, 'NC', `Removeu anexo de ${row.numero}`, a.nome, row.numero);
   });
   return { ok: true };
 });
 
-route('PUT', '/api/config', async ({ user, body }) => {
+route('PUT', '/api/config', async ({ user, body, ip }) => {
   if (user.perfil !== 'admin') throw new ApiError(403, 'Somente o administrador altera as configurações.');
   const cfg = await getCfg(sql);
+  const antes = JSON.parse(JSON.stringify(cfg));
   for (const k of ['setores', 'tipos', 'origens', 'disposicoes', 'responsaveis']) {
     if (Array.isArray(body[k])) cfg[k] = body[k].map((x: Any) => sliceCp(str(x).trim(), 0, 120)).filter((x: string) => x);
   }
@@ -738,6 +919,27 @@ route('PUT', '/api/config', async ({ user, body }) => {
     cfg[k] = Object.fromEntries(Object.entries(cfg[k] || {}).filter(([s]) => cfg.setores.includes(s)));
   }
   await saveCfg(sql, cfg);
+  const rotulos: [string, string][] = [['setores', 'Setores'], ['origens', 'Origens'], ['disposicoes', 'Disposições'],
+    ['responsaveis', 'Responsáveis externos'], ['prefixo', 'Prefixo'], ['setorGestor', 'Gestor da área'],
+    ['setorUsuarios', 'Equipe do setor'], ['setorCusto', 'Custo médio ADM/Operação']];
+  const mud: string[] = [];
+  for (const [k, rot] of rotulos) {
+    const a = antes[k], b = cfg[k];
+    if (sameVal(a, b)) continue;
+    if (Array.isArray(a) && Array.isArray(b)) {
+      const sa = a.map(x => JSON.stringify(x)), sb = b.map(x => JSON.stringify(x));
+      const add = b.filter((_x, i) => !sa.includes(sb[i])), rem = a.filter((_x, i) => !sb.includes(sa[i]));
+      const it = [...add.map(x => `+${x}`), ...rem.map(x => `-${x}`)];
+      mud.push(`${rot}: ` + (it.length ? it : ['reordenado']).join(', '));
+    } else if (isObj(a) && isObj(b)) {
+      const ks = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(x => !sameVal(a[x], b[x])).sort();
+      const v = (o: Any, x: string) => (o[x] && (!Array.isArray(o[x]) || o[x].length) ? pyVal(o[x]) : '—');
+      mud.push(`${rot}: ` + ks.map(x => `${x}: ${v(a, x)} → ${v(b, x)}`).join(', '));
+    } else {
+      mud.push(`${rot}: ${pyVal(a)} → ${pyVal(b)}`);
+    }
+  }
+  if (mud.length) await audit(sql, ip, user, 'Configurações', 'Alterou configurações', mud.join('; '));
   return { cfg };
 });
 
@@ -746,12 +948,12 @@ function requireAdmin(user: Any) {
 }
 
 route('GET', '/api/users', async ({ user }) => {
-  requireAdmin(user);
+  if (!VE_TUDO.includes(user.perfil)) requireAdmin(user); // o gestor consulta a lista (somente leitura)
   const rows = await sql`select * from nc.users order by ativo desc, lower(nome), nome`;
   return { users: rows.map((r: Any) => userOut(r, true)) };
 });
 
-route('POST', '/api/users', async ({ user, body }) => {
+route('POST', '/api/users', async ({ user, body, ip }) => {
   requireAdmin(user);
   const nome = str(body.nome ?? '').trim(), login = str(body.login ?? '').trim();
   const perfil = body.perfil;
@@ -766,6 +968,7 @@ route('POST', '/api/users', async ({ user, body }) => {
       await t`insert into nc.users(nome,login,email,senha,perfil,trocar_senha,criado_em)
         values(${nome},${login},${str(body.email ?? '').trim()},${hash},${perfil},true,${nowIso()})`;
       await nextRev(t);
+      await audit(t, ip, user, 'Usuários', `Criou o usuário ${nome}`, `login: ${login} · perfil: ${perfil}`);
     });
   } catch (e) {
     if ((e as Any)?.code === '23505') throw new ApiError(409, `Já existe um usuário com o login "${login}".`);
@@ -775,7 +978,7 @@ route('POST', '/api/users', async ({ user, body }) => {
   return { ok: true, senha, email };
 });
 
-route('PUT', '/api/users/(?<id>\\d+)', async ({ user, body, params }) => {
+route('PUT', '/api/users/(?<id>\\d+)', async ({ user, body, params, ip }) => {
   requireAdmin(user);
   const uid = parseInt(params.id, 10);
   const out: Any = { ok: true };
@@ -801,20 +1004,61 @@ route('PUT', '/api/users/(?<id>\\d+)', async ({ user, body, params }) => {
     }
     if (!ativo) await t`delete from nc.sessions where user_id=${uid}`;
     await nextRev(t);
+    const mud: string[] = [];
+    if (nome !== r.nome) mud.push(`nome: ${r.nome} → ${nome}`);
+    if (perfil !== r.perfil) mud.push(`perfil: ${r.perfil} → ${perfil}`);
+    if (ativo !== !!r.ativo) mud.push(ativo ? 'reativado' : 'desativado (acesso bloqueado)');
+    if (body.resetSenha) mud.push('nova senha provisória gerada');
+    const email = str(body.email ?? (r.email || '')).trim();
+    if (email !== (r.email || '')) mud.push(`e-mail: ${r.email || '—'} → ${email || '—'}`);
+    if (mud.length) await audit(t, ip, user, 'Usuários', `Alterou o usuário ${nome}`, mud.join('; '));
   });
   if (dest && novaSenha) out.email = await enviarSenha(dest.nome, dest.login, dest.email, novaSenha, false);
   return out;
 });
 
-route('POST', '/api/me/senha', async ({ user, body }) => {
+route('DELETE', '/api/users/(?<id>\\d+)', async ({ user, params, ip }) => {
+  // Exclui o usuário (ex.: desligamento). As NCs mantêm o nome dele no histórico.
+  requireAdmin(user);
+  const uid = parseInt(params.id, 10);
+  if (uid === user.id) throw new ApiError(422, 'Você não pode excluir o seu próprio usuário.');
+  return await tx(async t => {
+    const [r] = await t`select * from nc.users where id=${uid}`;
+    if (!r) throw new ApiError(404, 'Usuário não encontrado.');
+    if (r.perfil === 'admin' && r.ativo && await activeAdmins(t, uid) === 0) {
+      throw new ApiError(422, 'É preciso manter pelo menos um administrador ativo.');
+    }
+    const nm = norm(r.nome);
+    const abertas = (await t`select data from nc.ncs where status not in ('encerrada','cancelada')`)
+      .filter((row: Any) => norm(row.data.responsavel) === nm).length;
+    await t`delete from nc.sessions where user_id=${uid}`;
+    await t`delete from nc.online where user_id=${uid}`;
+    await t`delete from nc.notificacoes where user_id=${uid}`;
+    await t`delete from nc.users where id=${uid}`;
+    // tira o usuário da hierarquia dos setores (gestor / equipe)
+    const cfg = await getCfg(t);
+    for (const k of ['setorGestor', 'setorResp']) {
+      cfg[k] = Object.fromEntries(Object.entries(cfg[k] || {}).filter(([, n]) => norm(n) !== nm));
+    }
+    cfg.setorUsuarios = Object.fromEntries(Object.entries(cfg.setorUsuarios || {})
+      .map(([s, ns]) => [s, (Array.isArray(ns) ? ns : []).filter((n: Any) => norm(n) !== nm)]));
+    await t`insert into nc.kv(k,v) values('cfg', ${JSON.stringify(cfg)}) on conflict(k) do update set v=excluded.v`;
+    await nextRev(t);
+    await audit(t, ip, user, 'Usuários', `Excluiu o usuário ${r.nome}`, `login: ${r.login} · perfil: ${r.perfil} · NCs em aberto com ele: ${abertas}`);
+    return { ok: true, ncsAbertas: abertas };
+  });
+});
+
+route('POST', '/api/me/senha', async ({ user, body, ip }) => {
   if (!(await checkPw(str(body.atual ?? ''), user.senha))) throw new ApiError(422, 'Senha atual incorreta.');
   validatePw(body.nova);
   if (body.nova === body.atual) throw new ApiError(422, 'A nova senha deve ser diferente da atual.');
   await sql`update nc.users set senha=${await hashPw(String(body.nova))},trocar_senha=false where id=${user.id}`;
+  await audit(sql, ip, user, 'Acesso', 'Trocou a própria senha');
   return { ok: true };
 });
 
-route('GET', '/api/backup', async ({ user }) => {
+route('GET', '/api/backup', async ({ user, ip }) => {
   requireAdmin(user);
   const anx: Record<string, Any[]> = {};
   for (const a of await sql`select * from nc.anexos order by criado_em`) {
@@ -826,11 +1070,12 @@ route('GET', '/api/backup', async ({ user }) => {
     d.anexos = anx[r.id] || [];
     return d;
   });
+  await audit(sql, ip, user, 'Configurações', 'Baixou backup completo', `${ncs.length} NC(s)`);
   const payload = JSON.stringify({ app: 'melting-nc', versao: 2, exportadoEm: nowIso(), cfg: await getCfg(sql), ncs });
   return new Raw(payload, 'application/json', { 'Content-Disposition': `attachment; filename="backup-melting-nc_${today()}.json"` });
 });
 
-route('POST', '/api/import', async ({ user, body }) => {
+route('POST', '/api/import', async ({ user, body, ip }) => {
   requireAdmin(user);
   if (body.app !== 'melting-nc' || !Array.isArray(body.ncs)) throw new ApiError(422, 'Arquivo não é um backup deste sistema.');
   let nOk = 0;
@@ -869,8 +1114,33 @@ route('POST', '/api/import', async ({ user, body }) => {
       }
       nOk += 1;
     }
+    await audit(t, ip, user, 'Configurações', 'Importou backup', `${nOk} NC(s) importada(s)`);
   });
   return { ok: true, importadas: nOk };
+});
+
+route('GET', '/api/auditoria', async ({ user, q }) => {
+  // Trilha de auditoria: acessos e alterações. Administrador e Gestor consultam.
+  if (!VE_TUDO.includes(user.perfil)) throw new ApiError(403, 'Somente o administrador ou o gestor consultam os logs de acesso.');
+  const g = (k: string) => (q.get(k) || '').trim();
+  const conds: Any[] = [];
+  if (g('user')) conds.push(sql`user_id = ${/^\d+$/.test(g('user')) ? parseInt(g('user'), 10) : -1}`);
+  if (AUD_TIPOS.includes(g('tipo'))) conds.push(sql`tipo = ${g('tipo')}`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(g('de'))) conds.push(sql`substr(data,1,10) >= ${g('de')}`);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(g('ate'))) conds.push(sql`substr(data,1,10) <= ${g('ate')}`);
+  if (g('q')) {
+    const like = '%' + g('q').replace(/[\\%_]/g, m => '\\' + m) + '%';
+    conds.push(sql`(acao ilike ${like} or detalhe ilike ${like} or usuario ilike ${like} or login ilike ${like} or ref ilike ${like})`);
+  }
+  const where = conds.length ? conds.reduce((acc, c, i) => (i ? sql`${acc} and ${c}` : sql`where ${c}`), sql``) : sql``;
+  const lim = Math.min(Math.max(/^\d+$/.test(g('limit')) ? parseInt(g('limit'), 10) : 500, 1), 5000);
+  const rows = await sql`select * from nc.auditoria ${where} order by id desc limit ${lim}`;
+  const [c] = await sql`select count(*)::int n from nc.auditoria ${where}`;
+  return {
+    total: c.n,
+    logs: rows.map((r: Any) => ({ id: r.id, data: r.data, user_id: r.user_id, usuario: r.usuario, login: r.login, tipo: r.tipo,
+      acao: r.acao, detalhe: r.detalhe, ref: r.ref, ip: r.ip })),
+  };
 });
 
 // ---------------------------------------------------------------- HTTP
@@ -907,6 +1177,7 @@ async function auth(token: string | null) {
   if (r && r.expira - now < SESSION_DAYS * 86400 / 2) {
     await sql`update nc.sessions set expira=${now + SESSION_DAYS * 86400} where token=${token}`;
   }
+  if (r) await marcaOnline(r);
   return r || null;
 }
 
