@@ -447,10 +447,8 @@ function gotoList(k, v) {
 function renderOnline(list) {
   const box = $('#online'); if (!box || !Array.isArray(list)) return;
   S.online = list;
-  const vis = list.slice(0, 4), extra = list.length - vis.length;
   box.innerHTML = `<button class="online-btn" data-act="online-toggle" aria-label="Usuários online agora">
-      <span class="online-n"><span class="online-dot"></span><b>${list.length}</b> online</span>
-      <span class="online-lista">${vis.map(u => `<span class="online-nome" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}" title="${esc(u.nome)} · ${esc(PERFIS[u.perfil]?.label || u.perfil)}">${esc(u.nome)}${u.id === S.me?.id ? ' <small>(você)</small>' : ''}</span>`).join('')}${extra > 0 ? `<span class="online-mais" title="${esc(list.slice(4).map(u => u.nome).join(', '))}">+${extra} ${extra === 1 ? 'outro' : 'outros'}</span>` : ''}</span></button>
+      <span class="online-n"><span class="online-dot"></span><b>${list.length}</b> online</span></button>
     <div class="online-pop" id="online-pop"><div class="online-h">${icon('users')} Online agora <small>${list.length}</small></div>
       ${list.map(u => `<div class="online-row"><span class="online-dot"></span><span class="avatar sm" style="--pc:${PERFIS[u.perfil]?.color || '#93a7c0'}">${esc(initials(u.nome))}</span><div><b>${esc(u.nome)}${u.id === S.me?.id ? ' <small>(você)</small>' : ''}</b><small>${PERFIS[u.perfil]?.label || u.perfil}</small></div></div>`).join('')}
       <p class="online-note">Ativos nos últimos 90 segundos.</p></div>`;
