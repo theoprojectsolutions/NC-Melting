@@ -773,13 +773,27 @@ def _num(v):
         return 0.0
 
 
-def prox_dia_util(iso):
-    """Prazo padrão: 1 dia útil após a abertura, pulando sábado e domingo."""
+PRAZO_DIAS = 3
+
+
+def prazo_padrao(iso):
+    """Prazo padrão: 3 dias após a emissão da NC."""
     from datetime import timedelta
-    d = date.fromisoformat(iso[:10]) + timedelta(days=1)
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d.isoformat()
+    return (date.fromisoformat(iso[:10]) + timedelta(days=PRAZO_DIAS)).isoformat()
+
+
+def data_justificativa(d, old=None):
+    """A data da justificativa (seção 3) é sempre o dia em que o responsável escreveu/alterou a justificativa."""
+    cont = d.get('contencao') if isinstance(d.get('contencao'), dict) else {}
+    novo = str(cont.get('descricao') or '').strip()
+    antes = str(((old or {}).get('contencao') or {}).get('descricao') or '').strip()
+    if not novo:
+        cont['data'] = ''
+    elif novo != antes:
+        cont['data'] = today()
+    else:
+        cont['data'] = ((old or {}).get('contencao') or {}).get('data') or today()
+    d['contencao'] = cont
 
 
 @route('POST', '/api/ncs')
@@ -796,7 +810,8 @@ def r_create(h, con, user, body, q):
     d['criadoPor'], d['criadoPorId'] = user['nome'], user['id']
     d['dataRegistro'], d['createdAt'] = today(), now_iso()
     if not d.get('prazo'):
-        d['prazo'] = prox_dia_util(d['dataRegistro'])
+        d['prazo'] = prazo_padrao(d['dataRegistro'])
+    data_justificativa(d)
     if not _num(d.get('custo')):   # sem prejuízo informado: usa o custo médio do setor (Configurações)
         cm = (get_cfg(con).get('setorCusto') or {}).get(d.get('setor') or '')
         if cm:
@@ -838,6 +853,7 @@ def r_update(h, con, user, body, q, id):
             if k in old:
                 d[k] = old[k]
         d['historico'] = list(old.get('historico') or [])
+        data_justificativa(d, old)
         enc = dict(old.get('encerramento') or {'data': '', 'por': ''})
         enc['comentario'] = str((nc_in.get('encerramento') or {}).get('comentario', enc.get('comentario', '')))[:5000]
         d['encerramento'] = enc

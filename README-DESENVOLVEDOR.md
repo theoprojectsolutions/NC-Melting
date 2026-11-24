@@ -1,11 +1,17 @@
 # Melting · Gestão de Não Conformidades — Guia do desenvolvedor
 
 Sistema web multiusuário para registro e tratamento de Não Conformidades (NCs), usado na rede interna (LAN).
-Versão do servidor: **2.0** · Data deste pacote: **18/11/2026**.
+Versão do servidor: **2.0** · Data deste pacote: **24/11/2026**.
 
 ---
 
-## Novidades de 18/11/2026 (só front-end; `server.py` não mudou)
+## Novidades de 24/11/2026
+
+- **Prazo padrão = 3 dias corridos após a emissão**: `PRAZO_DIAS`/`prazo_padrao()` em `server.py` e `PRAZO_DIAS`/`prazoPadrao()` em `app.js` (substituem `prox_dia_util`/`proxDiaUtil`, que usavam 1 dia útil).
+- **Responsável pelo tratamento** começa vazio ("Selecione o usuário…"); `applySetorResp` não preenche mais o gestor — só reordena a lista. Continua obrigatório (`check_responsavel`).
+- **Data da justificativa (seção 3)** é definida pelo servidor em `data_justificativa(d, old)`: hoje quando o texto é escrito/alterado, mantém a data quando o texto não muda, vazia sem texto. No front o campo é somente leitura e mostra a data na hora em que o texto é digitado.
+
+## Novidades de 18/11/2026 (só front-end)
 
 - **Usuários online**: o topo mostra só a quantidade; a lista completa (`#online-pop`) abre no hover de `.online-box` (CSS) ou no clique (`data-act="online-toggle"`, para toque).
 - **Painel → Por origem**: quadro novo (`.dash-origem`) com total do período, quantidade e % por origem (inclui as origens configuradas sem NC) e linha de total.
@@ -67,7 +73,7 @@ Arquivos gerados em `data/` em tempo de execução: `melting-nc.db`, `backups/` 
   - `can_edit`, `pode_encerrar`, `check_transition` — permissões e fluxo (sair de *Aguardando autorização* exige o gestor da área; encerrar exige perfil em `ENCERRA`).
   - `missing_for` — o que falta para sair de cada etapa (justificativa + causa raiz em *Em análise*; ação da Qualidade em *Qualidade*).
   - `check_rascunho`, `check_required`, `check_custo_log`, `check_responsavel` — validações.
-  - `clean`, `diff_nc`/`hist`, `prox_dia_util` — como antes.
+  - `clean`, `diff_nc`/`hist` — como antes; `prazo_padrao` (prazo = emissão + 3 dias); `data_justificativa` (data da seção 3).
   - `audit`, `resumo_alteracoes` — trilha de auditoria; `notificar`, `notificar_etapa`, `notif_resumo` — notificações; `marca_online`, `online_list` — presença.
 - **Concorrência**: controle otimista por `version` (HTTP 409); sincronização incremental pelo contador `rev`.
 
@@ -110,7 +116,9 @@ Arquivos gerados em `data/` em tempo de execução: `melting-nc.db`, `backups/` 
 - **Fluxo**: Rascunho → Em análise → Aguardando autorização (gestor da área) → Qualidade → Encerrada (+ Cancelada).
 - **Obrigatórios**: título, descrição, data, origem, setor, severidade, responsável (usuário ativo), cliente/fornecedor e "Houve custo logístico?" (valor obrigatório se Sim). Rascunho exige só o título.
 - **Custos**: prejuízo estimado (padrão = custo médio do setor) + custo logístico = prejuízo total; canceladas não entram no custo da não qualidade.
-- **Prazo**: 1 dia útil após a abertura (sexta → segunda).
+- **Prazo**: 3 dias corridos após a emissão (editável).
+- **Responsável pelo tratamento**: obrigatório, começa vazio (não é preenchido com o gestor).
+- **Data da justificativa**: automática (dia em que o responsável escreve/altera a justificativa).
 - **Plano de ação 5W2H e verificação de eficácia** existem no código, mas estão **desligados** (`PLANO_ACAO = False` em `server.py` **e** em `app.js`).
 
 ## 6. Dicas para evoluir

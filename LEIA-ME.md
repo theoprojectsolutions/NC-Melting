@@ -53,7 +53,9 @@ Em **Configurações → Setores / áreas** cada setor tem um **gestor da área*
 
 - A **autorização** da NC é feita pelo **gestor da área** do setor da NC (o administrador também pode); depois dela a NC vai para a etapa **Qualidade**.
 - O **encerramento** é feito pela **Qualidade** — perfis **Qualidade, Gestor ou Administrador** — depois de registrar a **Ação da Qualidade**.
-- O gestor é sugerido como responsável ao escolher o setor e vê as NCs da área em *Minhas pendências*.
+- O **responsável pelo tratamento** é obrigatório e começa em "Selecione o usuário…" (não é preenchido com o gestor); ao escolher o setor, os usuários da área aparecem primeiro na lista. O gestor vê as NCs da área em *Minhas pendências*.
+- O **prazo para tratamento** já vem com **3 dias após a emissão** da NC (pode ser ajustado).
+- A **data da justificativa** (seção 3) é preenchida sozinha com o dia em que o responsável escreve a justificativa (se ele alterar o texto depois, a data é atualizada).
 - A equipe pode tratar as NCs do seu setor quando for o responsável por elas.
 - Ao abrir a NC é obrigatório responder **"Houve custo logístico?"**. Se **Sim**, o **valor do custo logístico** passa a ser obrigatório; ele é somado ao prejuízo estimado no **prejuízo total** da NC (Painel, impressão e Excel).
 - O **custo médio ADM / Operação** do setor é usado como **prejuízo estimado** quando a NC é registrada sem valor (o usuário pode trocar o valor a qualquer momento).

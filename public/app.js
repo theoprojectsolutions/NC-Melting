@@ -140,8 +140,9 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const isoOf = d => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const todayISO = () => isoOf(new Date());
 const addDays = (iso, n) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n); return isoOf(d); };
-/** Prazo padrão: 1 dia útil após a abertura (sexta → segunda; sábado/domingo → segunda/terça). */
-const proxDiaUtil = iso => { const d = new Date(iso + 'T12:00'); do d.setDate(d.getDate() + 1); while (d.getDay() === 0 || d.getDay() === 6); return isoOf(d); };
+/** Prazo padrão: 3 dias após a emissão da NC. */
+const PRAZO_DIAS = 3;
+const prazoPadrao = iso => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + PRAZO_DIAS); return isoOf(d); };
 const nowISO = () => new Date().toISOString();
 const fmtD = iso => { if (!iso) return '—'; const [y, m, d] = iso.slice(0, 10).split('-'); return `${d}/${m}/${y}`; };
 const fmtDT = iso => { if (!iso) return '—'; const d = new Date(iso); return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); };
@@ -1025,7 +1026,7 @@ function blankNC() {
   return {
     id: '', numero: '', titulo: '', descricao: '', dataOcorrencia: todayISO(),
     tipo: '', origem: '', setor: '', cliente: '', os: '', item: '', quantidade: '',
-    severidade: 'media', detectadoPor: S.me.nome, responsavel: '', prazo: proxDiaUtil(todayISO()), custo: '', custoLogHouve: '', custoLog: '',
+    severidade: 'media', detectadoPor: S.me.nome, responsavel: '', prazo: prazoPadrao(todayISO()), custo: '', custoLogHouve: '', custoLog: '',
     reincidente: 'nao', ncRelacionada: '', status: 'aberta',
     contencao: { descricao: '', responsavel: '', data: '', disposicao: '' },
     causa: { porques: ['', '', '', '', ''], ishikawa: {}, causaRaiz: '' },
@@ -1151,7 +1152,7 @@ function secIdent() {
       ${fld('Descrição detalhada', 'descricao', { type: 'textarea', req: true, rows: 4, cls: 'c4', ph: 'Descreva a não conformidade: requisito não atendido, evidência objetiva, valores medidos x especificados…' })}
       ${fld('Detectado por', 'detectadoPor', { list: 'dl-resp' })}
       ${respField()}
-      ${fld('Prazo para tratamento', 'prazo', { type: 'date', help: '1 dia útil após a abertura (sem fim de semana)' })}
+      ${fld('Prazo para tratamento', 'prazo', { type: 'date', help: '3 dias após a emissão da NC' })}
       ${segRadio('Reincidente?', 'reincidente', [['nao', 'Não', '#7d8ea3'], ['sim', 'Sim', '#f43f5e']])}
       ${fld('NC relacionada (se reincidente)', 'ncRelacionada', { cls: 'c2', ph: 'Ex.: NC-2026-004' })}
       <div class="c2 gestor-area" id="gestor-area">${gestorAreaHTML()}</div>
@@ -1183,7 +1184,7 @@ function respField() {
   const d = S.draft, val = d.responsavel || '';
   const g = d.setor ? gestorSetor(d.setor) : '';
   const orfao = val && !S.pessoas.includes(val);
-  const hint = !d.setor ? 'escolha o setor primeiro'
+  const hint = !d.setor ? 'usuários da área aparecem primeiro ao escolher o setor'
     : g && S.pessoas.includes(g) ? (val === g ? 'gestor da área' : `gestor da área: ${esc(g)}`)
     : 'setor sem gestor definido';
   const daArea = d.setor ? S.pessoas.filter(p => p === g || equipeSetor(d.setor).includes(p)) : [];
@@ -1196,12 +1197,8 @@ function respField() {
     </select></label>`;
 }
 function applySetorResp(setor) {
-  const r = gestorSetor(setor);
-  const daArea = r === S.draft.responsavel || equipeSetor(setor).includes(S.draft.responsavel);
-  if (r && S.pessoas.includes(r) && !daArea) {   // sugere o gestor, sem trocar quem já é da área
-    S.draft.responsavel = r;
-    toast(`Responsável definido pelo setor: ${r} (gestor)`, 'info');
-  }
+  // O responsável NÃO é preenchido automaticamente: começa em "Selecione o usuário…" e é obrigatório.
+  // Ao trocar o setor, só reorganiza a lista (usuários da área primeiro).
   const f = $('[data-fld="responsavel"]');
   if (f) { f.outerHTML = respField(); }
   applySetorCusto(setor);
@@ -1226,7 +1223,7 @@ function secCont(n = 3) {
     <div class="grid">
       ${fld('Justificativa do responsável', 'contencao.descricao', { type: 'textarea', cls: 'c4', rows: 3, ph: 'Ex.: Peças segregadas e identificadas com etiqueta vermelha; inspeção 100% do lote…',
         help: S.isNew ? 'Preenchida pelo responsável na etapa Em análise — não é obrigatória na abertura.' : 'Obrigatória para enviar a NC para autorização.' })}
-      ${fld('Data', 'contencao.data', { type: 'date' })}
+      ${fld('Data', 'contencao.data', { type: 'date', ro: true, help: 'Preenchida automaticamente com o dia em que o responsável justificou a NC.' })}
     </div>`);
 }
 function secCausa(n = 4) {
@@ -1962,6 +1959,10 @@ function bindGlobal() {
     if (f === 'titulo') $('#ed-h2').textContent = el.value || 'Nova não conformidade';
     if (f === 'setor') applySetorResp(el.value);
     if (f === 'custo') delete S.draft._custoAuto;   // valor digitado pelo usuário prevalece
+    if (f === 'contencao.descricao') {   // data da justificativa = dia em que o responsável escreve (o servidor confirma ao salvar)
+      const dt = el.value.trim() ? todayISO() : '';
+      setPath(S.draft, 'contencao.data', dt); const di = $('[data-f="contencao.data"]'); if (di) di.value = dt;
+    }
     if (f === 'custoLogHouve') { if (el.value !== 'sim') S.draft.custoLog = ''; refreshCustoLog(); if (el.value === 'sim') $('[data-f="custoLog"]')?.focus(); }
     if (f === 'custo' || f === 'custoLog') { const t = $('#custo-total'); if (t) t.innerHTML = custoTotalInfo(); }
     if (f === 'severidade') $('#ed-sev').innerHTML = pillSev(el.value);

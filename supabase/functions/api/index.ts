@@ -14,7 +14,7 @@ import postgres from 'npm:postgres@3.4.5';
 import { Buffer } from 'node:buffer';
 import { enviarSenha } from './email.ts';
 
-const VERSAO = '2.1-supabase';
+const VERSAO = '2.2-supabase';
 const SESSION_DAYS = 14;
 const MAX_BODY = 25 * 1024 * 1024;
 const MAX_FILE = 8 * 1024 * 1024;
@@ -527,11 +527,25 @@ function decodeDataUrl(s: Any): [string, Uint8Array] {
   }
 }
 
-function proxDiaUtil(iso: string) {
-  // Prazo padrão: 1 dia útil após a abertura, pulando sábado e domingo.
+const PRAZO_DIAS = 3;
+
+function prazoPadrao(iso: string) {
+  // Prazo padrão: 3 dias após a emissão da NC.
   const d = new Date(iso.slice(0, 10) + 'T12:00:00Z');
-  do d.setUTCDate(d.getUTCDate() + 1); while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  d.setUTCDate(d.getUTCDate() + PRAZO_DIAS);
   return d.toISOString().slice(0, 10);
+}
+
+function dataJustificativa(d: Any, old?: Any) {
+  // A data da justificativa (seção 3) é sempre o dia em que o responsável escreveu/alterou a justificativa.
+  const cont: Any = isObj(d.contencao) ? d.contencao : {};
+  const oc: Any = isObj((old || {}).contencao) ? old.contencao : {};
+  const novo = str(cont.descricao || '').trim();
+  const antes = str(oc.descricao || '').trim();
+  if (!novo) cont.data = '';
+  else if (novo !== antes) cont.data = today();
+  else cont.data = oc.data || today();
+  d.contencao = cont;
 }
 
 const cleanId = (s: Any) => sliceCp(str(s).replace(/[^\p{L}\p{N}_-]/gu, ''), 0, 40);
@@ -734,7 +748,8 @@ route('POST', '/api/ncs', async ({ user, body, ip }) => {
   d.criadoPorId = user.id;
   d.dataRegistro = today();
   d.createdAt = nowIso();
-  if (!d.prazo) d.prazo = proxDiaUtil(d.dataRegistro);
+  if (!d.prazo) d.prazo = prazoPadrao(d.dataRegistro);
+  dataJustificativa(d);
   if (!num(d.custo)) {   // sem prejuízo informado: usa o custo médio do setor (Configurações)
     const cm = ((await getCfg(sql)).setorCusto || {})[d.setor || ''];
     if (cm) d.custo = cm;
@@ -776,6 +791,7 @@ route('PUT', `/api/ncs/${ID}`, async ({ user, body, params: { id }, ip }) => {
     const d = clean(ncIn);
     for (const k of ['criadoPor', 'criadoPorId', 'createdAt', 'dataRegistro']) if (k in old) d[k] = old[k];
     d.historico = Array.isArray(old.historico) ? [...old.historico] : [];
+    dataJustificativa(d, old);
     const enc = { ...(isObj(old.encerramento) ? old.encerramento : { data: '', por: '' }) };
     const encIn = isObj(ncIn.encerramento) ? ncIn.encerramento : {};
     enc.comentario = sliceCp(str('comentario' in encIn ? encIn.comentario : (enc.comentario ?? '')), 0, 5000);
